@@ -1,0 +1,1189 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Дежурный — симулятор инцидентов</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#e7ebf2; --panel:#f7f8fb; --panel2:#eef1f6; --line:#cfd6e3; --text:#172033; --muted:#5c6780;
+  --amber:#b86b00; --amber-bg:#fff3df; --ok:#1f8a5b; --warn:#b86b00; --crit:#cc2f2f; --info:#2f63c9;
+  --chart:#2f63c9; --chart-fill:rgba(47,99,201,.12); --shadow:0 1px 0 rgba(23,32,51,.06);
+  --sans:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif;
+  --mono:"JetBrains Mono",ui-monospace,"SFMono-Regular",Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#0e1526; --panel:#152036; --panel2:#1a2742; --line:#26365a; --text:#e3e8f2; --muted:#8b98b5;
+    --amber:#ffb347; --amber-bg:#2b2410; --ok:#4fd19b; --warn:#ffb347; --crit:#ff6464; --info:#7aa7ff;
+    --chart:#7aa7ff; --chart-fill:rgba(122,167,255,.14); --shadow:none;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0e1526; --panel:#152036; --panel2:#1a2742; --line:#26365a; --text:#e3e8f2; --muted:#8b98b5;
+  --amber:#ffb347; --amber-bg:#2b2410; --ok:#4fd19b; --warn:#ffb347; --crit:#ff6464; --info:#7aa7ff;
+  --chart:#7aa7ff; --chart-fill:rgba(122,167,255,.14); --shadow:none;
+}
+:root{box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+*,*::before,*::after{box-sizing:inherit}
+html,body{margin:0}
+body{background:var(--bg);color:var(--text);font:15px/1.45 var(--sans);-webkit-font-smoothing:antialiased;min-height:100vh}
+button{font:inherit;color:inherit;cursor:pointer}
+button:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid var(--info);outline-offset:2px}
+.mono{font-family:var(--mono)}
+.muted{color:var(--muted)}
+.ok{color:var(--ok)}.warn{color:var(--warn)}.crit{color:var(--crit)}.info{color:var(--info)}
+
+/* top bar */
+.bar{position:sticky;top:env(safe-area-inset-top,0px);z-index:5;display:flex;align-items:center;gap:14px;flex-wrap:wrap;
+  padding:10px 16px;background:var(--panel);border-bottom:1px solid var(--line)}
+.pager{display:flex;align-items:baseline;gap:10px;background:var(--amber-bg);border:1px solid var(--amber);border-radius:6px;padding:4px 12px}
+.pager .clock{font:700 26px/1 var(--mono);color:var(--amber);letter-spacing:.02em}
+.pager .day{font:12px var(--mono);color:var(--amber);opacity:.8}
+.scn-name{font-weight:600}
+.scn-sub{font-size:13px;color:var(--muted)}
+.budget{display:flex;align-items:center;gap:8px;min-width:190px}
+.budget .meter{flex:1;height:8px;border-radius:4px;background:var(--panel2);border:1px solid var(--line);overflow:hidden;min-width:90px}
+.budget .meter i{display:block;height:100%;background:var(--ok);transition:width .4s}
+.slo{font-size:13px;padding:3px 9px;border-radius:999px;border:1px solid currentColor;white-space:nowrap}
+.spacer{flex:1}
+.ctl{display:flex;gap:6px}
+.btn{background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:6px 11px;font-size:14px}
+.btn:hover{border-color:var(--muted)}
+.btn.primary{background:var(--amber);border-color:var(--amber);color:#1b1300;font-weight:600}
+
+/* layout */
+.game{display:grid;gap:12px;padding:12px 16px 24px;
+  grid-template-columns:minmax(230px,1fr) minmax(0,2.3fr) minmax(250px,1.05fr);
+  grid-template-areas:"alerts main actions" "changes main actions" "logs logs actions"}
+.p{background:var(--panel);border:1px solid var(--line);border-radius:8px;box-shadow:var(--shadow);min-width:0}
+.p h2{font-size:14px;font-weight:600;margin:0;padding:10px 12px 8px;display:flex;justify-content:space-between;align-items:center;gap:8px}
+.p h2 small{font-weight:400;color:var(--muted);font-size:12px}
+.alerts{grid-area:alerts}.changes{grid-area:changes}.main{grid-area:main;display:flex;flex-direction:column;gap:12px}
+.actions{grid-area:actions;align-self:start}.logs{grid-area:logs}
+@media (max-width:1100px){
+  .game{grid-template-columns:1fr 1fr;grid-template-areas:"main main" "alerts actions" "changes actions" "logs logs"}
+}
+@media (max-width:720px){
+  .game{grid-template-columns:1fr;grid-template-areas:"alerts" "main" "actions" "logs" "changes";padding:10px}
+  .pager .clock{font-size:22px}
+  .bar{gap:10px;padding:8px 10px}
+  .budget{min-width:0;flex:1 1 150px}
+}
+
+/* alerts */
+.alist{list-style:none;margin:0;padding:0 8px 10px;display:flex;flex-direction:column;gap:6px}
+.alist li{border-left:3px solid var(--line);background:var(--panel2);border-radius:4px;padding:6px 8px;font-size:13px}
+.alist li b{font-family:var(--mono);font-size:12.5px;font-weight:600;display:block}
+.alist li.crit{border-left-color:var(--crit)}.alist li.warn{border-left-color:var(--warn)}.alist li.info{border-left-color:var(--info)}
+.alist .since{float:right;color:var(--muted);font:11px var(--mono)}
+.empty{padding:4px 12px 12px;color:var(--muted);font-size:13px}
+
+/* change log */
+.clist{list-style:none;margin:0;padding:0 12px 12px;font-size:13px;max-height:320px;overflow:auto}
+.clist li{display:grid;grid-template-columns:78px 1fr;gap:8px;padding:5px 0;border-top:1px solid var(--line)}
+.clist li:first-child{border-top:0}
+.clist .when{font:12px var(--mono);color:var(--muted)}
+.tag{display:inline-block;font:11px var(--mono);padding:0 5px;border-radius:3px;margin-right:4px;border:1px solid var(--line);color:var(--muted)}
+.tag.deploy{color:var(--info);border-color:var(--info)}.tag.flag{color:var(--warn);border-color:var(--warn)}
+.tag.you{color:var(--ok);border-color:var(--ok)}.tag.ext{color:var(--crit);border-color:var(--crit)}
+
+/* map */
+.mapwrap{padding:0 8px 8px;overflow-x:auto}
+.map{width:100%;min-width:540px;height:auto;display:block}
+.map .node rect{fill:var(--panel2);stroke:var(--line);stroke-width:1.5}
+.map .node.ok rect{stroke:var(--ok)}.map .node.warn rect{stroke:var(--warn)}.map .node.crit rect{stroke:var(--crit);stroke-width:2.5}
+.map .node.off rect{stroke-dasharray:4 3}
+.map .node text{fill:var(--text);font:600 12px var(--sans)}
+.map .node text.sub{fill:var(--muted);font:10.5px var(--mono)}
+.map .edge{stroke:var(--line);stroke-width:2;fill:none;stroke-dasharray:6 6;animation:flow 1s linear infinite}
+.map .edge.warn{stroke:var(--warn)}.map .edge.crit{stroke:var(--crit)}.map .edge.off{animation:none;opacity:.35}
+@keyframes flow{to{stroke-dashoffset:-12}}
+@media (prefers-reduced-motion:reduce){.map .edge{animation:none}}
+
+/* charts */
+.charts{display:grid;grid-template-columns:repeat(auto-fill,minmax(165px,1fr));gap:8px;padding:0 8px 8px}
+@media (max-width:560px){.charts{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.ch{background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:7px 8px 4px}
+.ch .top{display:flex;justify-content:space-between;align-items:baseline;gap:6px}
+.ch .ttl{font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ch .val{font:600 15px var(--mono);white-space:nowrap}
+.ch svg{width:100%;height:52px;display:block}
+.ch .line{fill:none;stroke:var(--chart);stroke-width:1.6}
+.ch.warn .line{stroke:var(--warn)}.ch.crit .line{stroke:var(--crit)}
+.ch .area{fill:var(--chart-fill);stroke:none}
+.ch .thr{stroke:var(--muted);stroke-dasharray:3 3;stroke-width:1;opacity:.7}
+.ch .now{stroke:var(--amber);stroke-width:1;opacity:.7}
+
+/* actions */
+.agroup{padding:2px 10px 8px}
+.agroup h3{font-size:12px;font-weight:500;color:var(--muted);margin:6px 2px 6px}
+.act{display:flex;gap:8px;align-items:flex-start;width:100%;text-align:left;background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:7px 9px;margin-bottom:6px}
+.act:hover:not(:disabled){border-color:var(--amber)}
+.act:disabled{opacity:.45;cursor:not-allowed}
+.act .ic{width:20px;text-align:center;flex:none}
+.act .nm{font-size:13.5px;font-weight:500;display:block}
+.act .ds{font-size:12px;color:var(--muted);display:block}
+.act.on{border-color:var(--info);background:color-mix(in srgb,var(--info) 10%,var(--panel2))}
+.pending{margin:0 10px 8px;padding:7px 9px;border:1px dashed var(--amber);border-radius:6px;font-size:12.5px;color:var(--amber)}
+.flag{display:flex;align-items:center;gap:10px;padding:6px 2px;border-top:1px solid var(--line)}
+.flag:first-of-type{border-top:0}
+.flag .fn{font:12.5px var(--mono);display:block}
+.flag .fd{font-size:12px;color:var(--muted);display:block}
+.sw{flex:none;width:38px;height:22px;border-radius:11px;border:1px solid var(--line);background:var(--panel2);position:relative;padding:0}
+.sw::after{content:"";position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:var(--muted);transition:left .15s}
+.sw[aria-checked="true"]{background:var(--ok);border-color:var(--ok)}
+.sw[aria-checked="true"]::after{left:18px;background:#fff}
+
+/* logs */
+.logbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.logbar select,.logbar label{font-size:12.5px}
+.logbar select{background:var(--panel2);color:var(--text);border:1px solid var(--line);border-radius:5px;padding:3px 6px}
+.loglist{font:12px/1.55 var(--mono);padding:0 12px 12px;max-height:300px;overflow:auto}
+.loglist div{white-space:pre-wrap;word-break:break-word;border-top:1px solid color-mix(in srgb,var(--line) 50%,transparent);padding:2px 0}
+.loglist .ts{color:var(--muted)}
+.loglist .svc{color:var(--info)}
+.lv-ERROR,.lv-FATAL{color:var(--crit)}.lv-WARN{color:var(--warn)}.lv-DEBUG{color:var(--muted)}
+
+/* overlay */
+.ov{position:fixed;inset:0;z-index:20;background:color-mix(in srgb,var(--bg) 82%,transparent);backdrop-filter:blur(3px);
+  display:flex;align-items:flex-start;justify-content:center;overflow:auto;
+  padding:calc(24px + env(safe-area-inset-top,0px)) 14px calc(24px + env(safe-area-inset-bottom,0px))}
+.ov[hidden]{display:none}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;max-width:760px;width:100%;padding:22px 24px}
+.card h1{font-size:28px;line-height:1.15;margin:0 0 6px;letter-spacing:-.01em}
+.card h2{font-size:18px;margin:22px 0 8px}
+.card p{margin:0 0 10px;max-width:68ch}
+.scgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px;margin-top:14px}
+.sc{text-align:left;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:12px 13px}
+.sc:hover{border-color:var(--amber)}
+.sc b{display:block;font-size:15.5px;margin-bottom:3px}
+.sc .d{font-size:13px;color:var(--muted);display:block}
+.sc .meta{display:flex;justify-content:space-between;margin-top:9px;font:12px var(--mono);color:var(--muted)}
+.dots i{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--line);margin-right:3px}
+.dots i.f{background:var(--amber)}
+.pagerscreen{background:var(--amber-bg);border:1px solid var(--amber);border-radius:8px;padding:14px 16px;font-family:var(--mono);color:var(--amber);margin:12px 0 16px}
+.pagerscreen .big{font-size:18px;font-weight:700;margin-bottom:4px}
+.howto{font-size:14px;color:var(--muted);padding-left:18px;margin:6px 0 0}
+.howto li{margin:3px 0}
+.row{display:flex;gap:8px;flex-wrap:wrap;margin-top:16px}
+.result{font-size:34px;font-weight:700;line-height:1.1;margin:0 0 4px}
+.stats{display:flex;gap:18px;flex-wrap:wrap;margin:10px 0 4px;font-size:14px}
+.stats b{font:700 20px var(--mono);display:block}
+.timeline{list-style:none;padding:0;margin:0}
+.timeline li{display:grid;grid-template-columns:52px 1fr;gap:10px;padding:8px 0;border-top:1px solid var(--line);font-size:14px}
+.verdict{font:600 11.5px var(--mono);padding:1px 6px;border-radius:3px;margin-right:6px;border:1px solid currentColor}
+.lessons{padding-left:18px;margin:0}
+.lessons li{margin:5px 0}
+.toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(18px + env(safe-area-inset-bottom,0px));z-index:30;
+  background:var(--panel);border:1px solid var(--amber);border-radius:8px;padding:10px 14px;max-width:min(560px,92vw);font-size:14px;box-shadow:0 6px 24px rgba(0,0,0,.25)}
+.toast[hidden]{display:none}
+</style>
+</head>
+<body>
+
+<div class="bar" id="bar" hidden>
+  <div class="pager"><span class="clock" id="clock">03:17</span><span class="day">сб</span></div>
+  <div><div class="scn-name" id="scnName"></div><div class="scn-sub" id="scnSub"></div></div>
+  <div class="budget" title="Сколько ещё пользователи готовы терпеть ошибки и тормоза"><span class="muted" style="font-size:13px">Error budget</span><div class="meter"><i id="budgetBar"></i></div><span class="mono" id="budgetVal" style="font-size:13px">100%</span></div>
+  <span class="slo" id="slo"></span>
+  <div class="spacer"></div>
+  <div class="ctl">
+    <button class="btn" id="bPause" title="Пауза (пробел)">⏸ Пауза</button>
+    <button class="btn" id="bSpeed" title="Скорость">1×</button>
+    <button class="btn" id="bHint" title="Позвонить тимлиду: подсказка стоит очков">📞 Тимлид</button>
+    <button class="btn" id="bMenu" title="К списку сценариев">Выйти</button>
+  </div>
+</div>
+
+<main class="game" id="game" hidden>
+  <section class="p alerts"><h2>Алерты <small id="alertCount"></small></h2><ul class="alist" id="alerts"></ul></section>
+  <section class="p changes"><h2>Журнал изменений <small>что менялось</small></h2><ul class="clist" id="changes"></ul></section>
+  <div class="main">
+    <section class="p"><h2>Карта сервисов <small>полка.ру · prod</small></h2><div class="mapwrap" id="map"></div></section>
+    <section class="p"><h2>Метрики <small>последние 36 мин · | — пейджер</small></h2><div class="charts" id="charts"></div></section>
+  </div>
+  <section class="p actions"><h2>Действия <small>эффект не мгновенный</small></h2><div id="pending"></div><div id="actions"></div>
+    <div class="agroup"><h3>Фича-флаги</h3><div id="flags"></div></div></section>
+  <section class="p logs"><h2>Логи
+    <span class="logbar"><select id="logSvc" aria-label="Сервис"><option value="">все сервисы</option></select>
+    <label><input type="checkbox" id="logWarn"> только WARN и выше</label></span></h2>
+    <div class="loglist" id="logs"></div></section>
+</main>
+
+<div class="ov" id="ov"><div class="card" id="ovCard"></div></div>
+<div class="toast" id="toast" hidden></div>
+
+<script id="engine">
+/* ================= ENGINE ================= */
+const START_MIN = 3*60+17, HIST = 26, MAX_T = 40, TREND = 36;
+const rnd=(a,b)=>a+Math.random()*(b-a);
+const rint=(a,b)=>Math.floor(rnd(a,b+1));
+const clamp=(x,a,b)=>Math.max(a,Math.min(b,x));
+const pick=a=>a[Math.floor(Math.random()*a.length)];
+function fmt(t){const m=((START_MIN+t)%1440+1440)%1440;return String(Math.floor(m/60)).padStart(2,'0')+':'+String(m%60).padStart(2,'0');}
+
+const FLAG_INFO={
+  'recs-v2':'Персональные рекомендации v2 на главной',
+  'nightly-analytics':'Ночной cron: аналитический отчёт по заказам',
+  'search-autocomplete-v3':'Автодополнение в поиске v3',
+  'promo-banner':'Баннер осенней распродажи'
+};
+
+const V={good:'good',bad:'bad',neutral:'neutral'};
+const DEFAULT_V={
+  rollback:['neutral','Код API не причина этого инцидента — откат просто съел несколько минут.'],
+  scaleUp:['neutral','Добавление подов не затронуло причину инцидента.'],
+  scaleDown:['neutral','Число подов не было проблемой.'],
+  restart:['neutral','Рестарт ничего не изменил по сути.'],
+  flush:['bad','FLUSHALL на проде: все запросы, которые раньше отдавал Redis, разом ушли в Postgres. Кэш был здоров.'],
+  warm:['neutral','Кэш и так был тёплым.'],
+  ratelimit:['bad','Rate limit отрезал живых пользователей (429), а причина была не в объёме трафика.'],
+  'ratelimit:off':['neutral','Ограничение трафика снято.'],
+  cb:['neutral','Платёжный провайдер был здоров — circuit breaker ничего не решал.'],
+  'cb:off':['neutral','Circuit breaker закрыт.'],
+  timeout:['neutral','Таймауты к внешним API не были узким местом.'],
+  'timeout:off':['neutral','Таймаут возвращён к 5 с.'],
+  expandDisk:['neutral','Место на диске не было проблемой — только лишние деньги.'],
+  secrets:['neutral','Секреты были в порядке.'],
+  certs:['neutral','Сертификаты были действительны.'],
+  waf:['bad','Топ-подсети в обычном трафике — это мобильные операторы и офисные NAT: заблокированы живые покупатели.'],
+  'waf:off':['neutral','Блокировка снята.'],
+  dlq:['neutral','Очередь работала нормально — сбойных сообщений не было.'],
+  consumers:['neutral','Очередь не была узким местом.'],
+  l1:['neutral','Горячих ключей не было — L1-кэш ничего не изменил, зато данные стали отдаваться с задержкой до 5 с.'],
+  'l1:off':['neutral','L1-кэш выключен.'],
+  ntp:['neutral','Время на нодах было в порядке.'],
+  lbRevert:['neutral','Последнее изменение конфига LB было безобидным — откат ничего не дал.'],
+  drainAz:['bad','Зона AZ-b была здорова: треть мощности ушла впустую, остальные поды получили лишнюю нагрузку.'],
+  'drainAz:off':['neutral','Трафик возвращён в зону.'],
+  kill:['bad','Убиты обычные пользовательские транзакции — ошибок стало больше, а БД сама по себе была ни при чём.'],
+  failover:['bad','Failover здоровой базы — это несколько минут отказа записи на ровном месте.'],
+};
+
+const SCENARIOS=[
+{
+  id:'bad-deploy', title:'Пятничный деплой', diff:1,
+  blurb:'Пользователи не могут оформить заказ. Что-то сломалось совсем недавно.',
+  pager:'[CRITICAL] HighErrorRate — api 5xx > 5%',
+  story:'Интернет-магазин «Полка», ночь с пятницы на субботу. Трафик обычный, но в поддержку уже пишут: «не проходит оформление заказа».',
+  triggerAt:-14,
+  trigger(s){s.prevVersion=s.version;s.version='v2.14.0';s.bug=0.2;},
+  changelog:[
+    {when:'чт 16:20',type:'deploy',text:'search-svc v1.8.2 — поправлен ранжир по новинкам'},
+    {when:'пт 21:05',type:'flag',text:'promo-banner включён для 100% — старт распродажи'},
+    {t:-16,type:'deploy',text:'api v2.14.0 — «промокоды: новая логика скидок» (автодеплой из main)'},
+  ],
+  rootFixed:s=>s.rolledBack,
+  v:{
+    rollback:['good','Ошибки начались через 2 минуты после деплоя v2.14.0, а в логах NullPointerException в новом коде промокодов. Откат убирает причину.'],
+    scaleUp:['neutral','CPU и потоки не упирались. Больше подов с тем же багом дают те же ошибки.'],
+    restart:['neutral','Рестарт не чинит баг: поды поднимаются с той же версией.'],
+    'flag:promo-banner':['neutral','Баннер лишь показывает акцию, а падает расчёт скидки на бэкенде. Хорошая гипотеза, но логи указывали на версию кода.'],
+  },
+  hint:'Сравни время начала ошибок с журналом изменений. А в логах посмотри, какая версия кода падает.',
+  cause:'Автодеплой api v2.14.0 в 03:01 принёс баг в новой логике промокодов: для заказов без промокода `promo.getRules()` возвращал null, и checkout падал с NullPointerException. Около 20% запросов получали 500, клиенты ретраили — ошибок становилось ещё больше.',
+  ideal:'Заметить корреляцию «деплой → через 2 минуты рост 5xx», увидеть версию в стектрейсе → откатить. Чинить баг — уже днём, с тестом.',
+  lessons:[
+    'Первый вопрос на инциденте: «что изменилось?». Журнал деплоев и флагов — главный инструмент.',
+    'Сначала останови кровотечение (откат), потом разбирайся. Хотфикс ночью — плохая идея.',
+    'Масштабирование лечит нехватку ресурсов, а не баги.'
+  ]
+},
+{
+  id:'stampede', title:'Холодный кэш', diff:2,
+  blurb:'Сайт почти лежит. Postgres на 100%, хотя трафик обычный.',
+  pager:'[CRITICAL] HighLatencyP99 > 5s, PostgresCPUHigh',
+  story:'Ночь, трафик ровный — около 1200 запросов в секунду. Внезапно всё стало медленным, а потом начало падать. Команда платформы как раз проводила какие-то работы.',
+  triggerAt:-10,
+  trigger(s){s.cacheHit=0.1;},
+  changelog:[
+    {when:'ср 14:05',type:'deploy',text:'api v2.13.4 — мелкие правки корзины'},
+    {t:-65,type:'flag',text:'search-autocomplete-v3 раскатан на 100%'},
+    {t:-11,type:'infra',text:'redis-main: плановое обновление 7.2 → 7.4, ноды перезапущены (persistence выключена)'},
+  ],
+  rootFixed:s=>s.cacheHit>=0.85,
+  v:{
+    ratelimit:['good','Rate limit снизил поток промахов кэша в Postgres до уровня, который база переваривает — у кэша появился шанс наполниться.'],
+    'ratelimit:off':s=>s.cacheHit>0.8?['good','Вовремя снял ограничение, когда кэш прогрелся — пользователи больше не получают 429.']:['neutral','Ограничение снято, пока кэш ещё холодный: база снова под ударом.'],
+    warm:s=>s.m&&s.m.dbUtil<1.8?['good','Прогрев популярными ключами запущен, когда БД уже могла отвечать, — это ускорило восстановление.']:['neutral','Прогрев запущен, пока БД перегружена: задачи прогрева отвалились по таймауту. Сначала сними нагрузку с БД.'],
+    scaleUp:['bad','Больше подов API — больше соединений к уже задыхающемуся Postgres («too many clients»). Узкое место было в базе, а не в API.'],
+    flush:['bad','Кэш и так был холодным: FLUSHALL обнулил весь прогресс прогрева.'],
+    kill:['bad','Убиты обычные пользовательские запросы — они тут же пришли снова, плюс ретраи.'],
+    failover:['bad','Реплика получила тот же поток промахов кэша и вдобавок несколько минут отказа записи.'],
+    rollback:['neutral','Код не менялся со среды — откат ничего не дал, только время ушло.'],
+  },
+  hint:'Что изменилось незадолго до начала? Посмотри на hit rate Redis. И подумай, почему кэш сам не наполняется, пока база перегружена.',
+  cause:'Плановый рестарт Redis без persistence обнулил кэш. Все запросы, которые раньше отдавал кэш (92%), разом пошли в Postgres — это cache stampede. База захлебнулась, запросы падали по таймауту, и кэш не мог наполниться, ведь заполняется он как раз ответами базы. Клиентские ретраи добавляли нагрузки: система застряла в плохом состоянии.',
+  ideal:'Включить rate limit (или отключить тяжёлые страницы), чтобы нагрузка на БД упала ниже её ёмкости → кэш начинает наполняться → прогреть кэш → снять rate limit. Не добавлять поды: это только умножает соединения к БД.',
+  lessons:[
+    'Кэш — это не только ускорение, но и защита БД. Система, которая работает только с тёплым кэшем, должна уметь переживать холодный старт.',
+    'Защиты от stampede: request coalescing (один запрос в БД на ключ), stale-while-revalidate, прогрев перед переключением, jitter у TTL.',
+    'Иногда, чтобы спасти всех, нужно временно отказать части пользователей (load shedding).',
+    'Метастабильный отказ: система может застрять в плохом состоянии даже после исчезновения исходного триггера.'
+  ]
+},
+{
+  id:'payments', title:'Зависший партнёр', diff:2,
+  blurb:'Тормозит весь сайт — даже каталог, где никаких платежей нет.',
+  pager:'[CRITICAL] ThreadPoolSaturated — api, HighLatencyP99',
+  story:'Суббота, начало ночи. Лежит всё: каталог, поиск, корзина. При этом наш код не деплоили два дня, а база спокойна.',
+  triggerAt:-9,
+  trigger(s){s.extLat=20000;},
+  changelog:[
+    {when:'ср 14:05',type:'deploy',text:'api v2.13.4 — мелкие правки корзины'},
+    {t:-28,type:'infra',text:'cdn: плановое обновление TLS-сертификатов'},
+    {t:-6,type:'ext',text:'status.paybridge.io: «Investigating elevated API latency»'},
+  ],
+  rootFixed:s=>s.cb,
+  v:{
+    cb:['good','Circuit breaker перестал ждать мёртвого провайдера: потоки освободились, каталог и поиск ожили, а платежи ушли в очередь на повтор.'],
+    timeout:['bad','Больше таймаут — дольше каждый поток висит в ожидании. Каскад только усилился.'],
+    scaleUp:['neutral','Помогло чуть-чуть: новые поды тут же забились тем же ожиданием провайдера. Плюс лишние деньги.'],
+    ratelimit:['neutral','Нагрузка снизилась, но потоки всё равно висели на провайдере, а часть пользователей получила 429.'],
+    restart:['neutral','Потоки освободились на минуту — и тут же снова забились.'],
+    rollback:['neutral','Наш код не менялся — сломался внешний сервис.'],
+    kill:['neutral','База была ни при чём: транзакции зря прерваны.'],
+  },
+  hint:'Почему тормозит каталог, если сломались только платежи? Посмотри на пул потоков API и на то, чего эти потоки ждут.',
+  cause:'Платёжный провайдер paybridge начал отвечать за 20+ секунд. Наш клиент ждал 5 секунд и делал 3 попытки, то есть до 15 секунд на запрос. Все потоки API постепенно оказались заняты ожиданием — и каталог, поиск, корзина перестали обслуживаться. Проблема одной зависимости превратилась в каскадный отказ всего сервиса.',
+  ideal:'Увидеть thread pool exhausted + таймауты к paybridge + статус-страницу провайдера → открыть circuit breaker (fail fast, платежи в очередь). Не увеличивать таймауты.',
+  lessons:[
+    'Медленная зависимость опаснее мёртвой: мёртвая падает быстро, медленная держит ресурсы.',
+    'Таймауты должны быть короткими, ретраи — с backoff и бюджетом, а для внешних сервисов нужен circuit breaker.',
+    'Bulkheads: изолируй пулы потоков, чтобы платежи не могли забрать ресурсы у каталога.',
+    'Graceful degradation: лучше «оплата временно недоступна», чем лежащий магазин.'
+  ]
+},
+{
+  id:'leak', title:'Медленная смерть', diff:2,
+  blurb:'Поды API периодически умирают. Потом всё вроде бы в порядке… до следующего раза.',
+  pager:'[CRITICAL] PodOOMKilled — api (3 pods)',
+  story:'Ночь, всё почти работает. Но каждые несколько минут поды API падают, и в эти моменты пользователи видят ошибки.',
+  setup(s){s.flags['recs-v2']=false;},
+  triggerAt:-22,
+  trigger(s){s.flags['recs-v2']=true;},
+  changelog:[
+    {when:'ср 14:05',type:'deploy',text:'api v2.13.4 — мелкие правки корзины'},
+    {t:-52,type:'infra',text:'k8s: автообновление нод кластера (patch)'},
+    {t:-22,type:'flag',text:'recs-v2 раскатан с 5% на 100% пользователей'},
+  ],
+  rootFixed:s=>!s.flags['recs-v2'],
+  healthyExtra:s=>s.mem<85,
+  v:{
+    'flag:recs-v2':['good','Память начала расти ровно с раскатки recs-v2 на 100%: in-memory кэш рекомендаций без лимита и вытеснения. Выключение флага остановило утечку.'],
+    restart:s=>!s.flags['recs-v2']?['good','После выключения флага рестарт вернул подам нормальную память — финальный шаг.']:['neutral','Рестарт выиграл время, но утечка вернулась: память снова поползла вверх.'],
+    rollback:['neutral','Последний деплой был в среду, а память росла с раскатки флага. Откат перезапустил поды — выиграл время, но не больше.'],
+    scaleUp:['neutral','Утечка на каждом поде: больше подов — больше подов, которые упадут по OOM.'],
+    ratelimit:['neutral','Утечка растёт и при меньшей нагрузке, а часть пользователей получила 429.'],
+  },
+  hint:'Память растёт линейно — это утечка. С какого момента она началась? В логах есть DEBUG-строки, которые скрывает фильтр «только WARN».',
+  cause:'Флаг recs-v2 раскатили с 5% на 100%. В новом коде рекомендаций был in-memory кэш на пользователя без лимита и вытеснения: на 5% трафика незаметно, на 100% — память пода растёт ~4% в минуту до лимита, потом OOMKilled. Каждое падение пода — всплеск ошибок.',
+  ideal:'Увидеть «пилу» на графике памяти, совместить начало роста с раскаткой recs-v2 → выключить флаг → rolling restart, чтобы освободить память.',
+  lessons:[
+    'Рестарт — обезболивающее, а не лечение. Если после рестарта проблема возвращается, ищи причину.',
+    'Фича-флаги — отличный рычаг на инциденте: выключить быстрее, чем откатить.',
+    'Раскатывай постепенно (5% → 25% → 100%) и смотри на ресурсы между шагами.',
+    'Любой кэш в памяти должен иметь предел размера и политику вытеснения (LRU, TTL).'
+  ]
+},
+{
+  id:'cron', title:'Ночной отчёт', diff:3,
+  blurb:'Всё тормозит, в Postgres висят соединения. Кто-то держит базу.',
+  pager:'[CRITICAL] HighLatencyP99, PGConnectionsSaturated',
+  story:'Ночь, трафик минимальный для магазина, но каждая страница грузится секунды. В базе копятся ожидающие запросы.',
+  triggerAt:-13,
+  trigger(s){s.cronRunning=true;s.cronStartT=s.t;},
+  changelog:[
+    {when:'пт 19:10',type:'deploy',text:'analytics-jobs v0.9 — «отчёт теперь учитывает события пользователей»'},
+    {when:'ср 14:05',type:'deploy',text:'api v2.13.4 — мелкие правки корзины'},
+    {t:-13,type:'cron',text:'nightly-analytics запущен по расписанию (03:04) на primary'},
+  ],
+  rootFixed:s=>!s.cronRunning&&!s.flags['nightly-analytics'],
+  v:{
+    kill:s=>!s.flags['nightly-analytics']?['good','Тяжёлый запрос убит, джоба уже выключена — блокировки снялись окончательно.']:['good','Тяжёлый запрос убит, блокировки снялись. Но джоба осталась включённой — cron перезапустит её через несколько минут.'],
+    'flag:nightly-analytics':['good','Джоба больше не будет перезапускаться. Правильное место для отчётов — реплика или аналитическое хранилище, и не в ночь распродажи.'],
+    failover:['bad','Реплика сильно отставала из-за тяжёлой транзакции: при переключении потеряны последние записи заказов. Плюс минуты отказа записи, а джоба просто переподключилась к новому primary.'],
+    scaleUp:['bad','Больше подов — больше соединений к Postgres, где всё и так стоит в очереди за блокировками.'],
+    restart:['neutral','Поды API ни при чём: они ждут базу.'],
+  },
+  hint:'Кто кроме API ходит в базу ночью? Посмотри в журнал изменений и в логи postgres: кто кого ждёт.',
+  cause:'В пятницу обновили analytics-jobs: ночной отчёт стал джойнить заказы с таблицей событий. Джоба запускается на primary и держит длинную транзакцию с блокировками на orders. Запросы API встают в очередь за блокировками, соединения заканчиваются, всё тормозит. Если просто убить запрос, cron перезапускает джобу.',
+  ideal:'Найти в логах ожидание блокировок и долгий запрос → выключить джобу флагом (чтобы не было перезапуска) → убить долгий запрос. Failover не делать: реплика отстаёт.',
+  lessons:[
+    'Аналитика и OLTP на одной базе — классический источник ночных инцидентов. Отчёты — на реплику или в DWH.',
+    'statement_timeout и lock_timeout для фоновых джоб спасают основную нагрузку.',
+    'Чини в правильном порядке: сначала убери источник повторения, потом симптом.',
+    'Failover — тяжёлая артиллерия с риском потерять данные при отставании реплики.'
+  ]
+}
+];
+
+
+SCENARIOS.push(
+{
+  id:'cert', title:'Истёкший сертификат', diff:1,
+  blurb:'Поиск отвечает ошибками. Ровно с трёх ночи.',
+  pager:'[CRITICAL] HighErrorRate — api 5xx на /api/search',
+  story:'Примерно каждый пятый запрос падает. Каталог и корзина работают, но всё, что связано с поиском, — нет.',
+  triggerAt:-17,
+  trigger(s){s.certExpired=true;},
+  changelog:[
+    {when:'вт 09:12',type:'infra',text:'cert-manager: не удалось обновить сертификат search-svc.internal (ошибка ACME, повтор отложен)'},
+    {when:'ср 14:05',type:'deploy',text:'api v2.13.4 — мелкие правки корзины'},
+    {t:-47,type:'deploy',text:'search-svc v1.9.0 — новый словарь синонимов'},
+  ],
+  rootFixed:s=>!s.certExpired,
+  v:{
+    certs:['good','В логах x509: certificate has expired — mTLS-сертификат search-svc истёк ровно в 03:00. Перевыпуск вернул поиск.'],
+    rollback:['neutral','Откат api не трогает сертификат search-svc. Деплой поиска в 02:30 тоже был ни при чём: ошибки начались позже и ровно в 03:00.'],
+    'flag:search-autocomplete-v3':['neutral','Автодополнение тоже ходит в поиск, но выключение фичи не чинит TLS между сервисами.'],
+    restart:['neutral','Поды поднялись с тем же просроченным сертификатом.'],
+  },
+  hint:'Ошибки начались ровно в 03:00:00 — что обычно случается в круглое время? Ищи в логах строку про TLS.',
+  cause:'mTLS-сертификат search-svc.internal истёк в 03:00. Автообновление через cert-manager сломалось ещё во вторник (ошибка ACME), но алерта на это не было. API перестал устанавливать TLS-соединение с поиском, и все запросы поиска получали 502.',
+  ideal:'Заметить, что ошибки начались ровно в круглое время и только на поиске, найти x509 в логах → перевыпустить сертификат. Утром — алерты на срок действия сертификатов и на сбои cert-manager.',
+  lessons:[
+    'Ошибки, начавшиеся «ровно в 00:00», — подсказка: сертификаты, cron, лимиты, смена суток.',
+    'Мониторь срок действия сертификатов (алерт за 14 и за 3 дня) и сбои их автообновления.',
+    'Читай ошибку в логе целиком: x509 сразу называет причину. Недавний деплой рядом — ещё не виновник.'
+  ]
+},
+{
+  id:'disk', title:'Место кончается', diff:2,
+  blurb:'Диск основной базы заполнен на 93% — и цифра растёт на глазах.',
+  pager:'[WARNING] PGDiskAlmostFull — pg-1 93%',
+  story:'Сайт пока работает нормально. Но диск основной базы заполняется больше чем на процент в минуту. Когда он кончится, база перестанет принимать записи: заказы, корзины — всё.',
+  triggerAt:-24,
+  trigger(s){s.walBroken=true;},
+  changelog:[
+    {when:'чт 11:00',type:'infra',text:'postgres: включена архивация WAL в S3 для point-in-time recovery'},
+    {when:'ср 14:05',type:'deploy',text:'api v2.13.4 — мелкие правки корзины'},
+    {t:-80,type:'infra',text:'postgres: VACUUM ANALYZE по расписанию'},
+    {t:-25,type:'infra',text:'vault: плановая ротация ключей S3 (роль s3-backup-writer)'},
+  ],
+  rootFixed:s=>!s.walBroken&&s.disk<85,
+  healthyExtra:s=>s.disk<88,
+  v:{
+    secrets:['good','Архиватор WAL не мог писать в S3: ключи ротировали, а процесс держал старые. После перечитывания секретов накопленные WAL-сегменты ушли в S3 и освободили место.'],
+    expandDisk:s=>s.disk>85?['good','Правильный первый ход: купить время, пока ищешь причину. Но без починки архивации диск заполнился бы снова.']:['neutral','Диск расширен, но место уже освобождалось — лишние деньги.'],
+    failover:['bad','На реплике тот же рост WAL, а при переключении теряются последние записи. Проблема не в железе primary.'],
+    kill:['neutral','Запросы ни при чём: место съедают WAL-файлы, а не данные.'],
+    restart:['neutral','Рестарт api не трогает диск базы.'],
+  },
+  hint:'Что пишет на диск и почему оно не удаляется? Логи postgres плюс журнал: что недавно меняли с доступами.',
+  cause:'В 02:52 Vault по расписанию ротировал ключи S3. Архиватор WAL в Postgres ходил со старыми ключами и получал AccessDenied. Пока WAL-сегмент не заархивирован, Postgres его не удаляет — сегменты копились примерно по 1,3% диска в минуту. На 100% база перестаёт принимать записи.',
+  ideal:'Сразу купить время (расширить диск), параллельно найти в логах «archive command failed … AccessDenied» и связать с ротацией ключей → перечитать секреты. Архив догоняется, место освобождается само. Удалять WAL руками нельзя: сломаешь базу и бэкапы.',
+  lessons:[
+    'Алерт на скорость заполнения («диск кончится через 20 минут») полезнее, чем порог в 90%.',
+    'Ротация секретов должна проверять, что все потребители подхватили новые ключи.',
+    'Никогда не удаляй файлы из pg_wal руками — это прямой путь к порче базы.',
+    'Выиграть время — нормальный первый шаг, если он не заменяет поиск причины.'
+  ]
+},
+{
+  id:'bots', title:'Нашествие', diff:2,
+  blurb:'Трафик вырос втрое. Распродажа удалась — или нет?',
+  pager:'[CRITICAL] HighLatencyP99, TrafficSpike',
+  story:'Идёт осенняя распродажа, вечером был отличный трафик. Сейчас глубокая ночь, а запросов втрое больше обычного, и сайт не справляется.',
+  triggerAt:-12,
+  trigger(s){s.bots=true;},
+  changelog:[
+    {when:'ср 14:05',type:'deploy',text:'api v2.13.4 — мелкие правки корзины'},
+    {when:'пт 21:05',type:'flag',text:'promo-banner включён для 100% — старт распродажи'},
+    {when:'пт 21:30',type:'infra',text:'email-рассылка о распродаже: 1,2 млн адресов'},
+  ],
+  rootFixed:s=>s.waf,
+  v:{
+    waf:['good','По логам LB 60% запросов — одна хостинговая подсеть с python-requests, перебирающая страницы поиска. Это скрейпер, а не покупатели: блокировка на WAF сняла нагрузку.'],
+    'waf:off':['bad','Сняв блокировку, пустил скрейпер обратно.'],
+    scaleUp:['neutral','Поды разгрузили API, но некэшируемый поиск бил прямо в Postgres — база осталась узким местом, а соединений стало больше.'],
+    ratelimit:['neutral','Глобальный rate limit режет всех одинаково: боты занимают лимит наравне с покупателями, и 429 получают все.'],
+    kill:['neutral','Запросы поиска от ботов тут же пришли снова.'],
+    'flag:promo-banner':['neutral','Гипотеза «это распродажа» разумна, но ночью живой трафик падает, а топ клиентов в логах — одна подсеть.'],
+    'flag:search-autocomplete-v3':['neutral','Автодополнение ни при чём: боты ходят в поиск напрямую.'],
+  },
+  hint:'Похоже ли это на людей? Посмотри логи балансировщика: кто и что запрашивает.',
+  cause:'Скрейпер конкурента с адресов одной хостинговой подсети перебирал страницы поиска — около 1900 запросов в секунду. Поиск с редкими параметрами не попадает в кэш и бьёт прямо в Postgres. API и база не выдерживали, страдали настоящие покупатели.',
+  ideal:'Проверить, откуда трафик: топ клиентов в логах LB (одна ASN, один User-Agent, последовательный перебор страниц) → заблокировать подсеть на WAF. Не резать всех глобальным rate limit.',
+  lessons:[
+    'Не каждый всплеск трафика — успех. Смотри на распределение: ASN, User-Agent, эндпоинты, паттерн.',
+    'Лимиты по клиенту (IP, токен, ASN) лучше глобального: глобальный наказывает всех.',
+    'Дорогие некэшируемые эндпоинты (поиск, фильтры) — первая цель ботов, им нужны свои лимиты.'
+  ]
+},
+{
+  id:'poison', title:'Застрявшая очередь', diff:2,
+  blurb:'Сайт зелёный, но заказы зависли в статусе «обрабатывается».',
+  pager:'[WARNING] QueueLagHigh — order-events',
+  story:'Сайт работает, а поддержка пишет: заказы не подтверждаются, письма не приходят. Очередь событий заказов растёт.',
+  triggerAt:-20,
+  trigger(s){s.poison=true;},
+  changelog:[
+    {when:'чт 15:40',type:'infra',text:'kafka: retention топика order-events увеличен до 7 дней'},
+    {when:'ср 14:05',type:'deploy',text:'api v2.13.4 — мелкие правки корзины'},
+    {t:-21,type:'deploy',text:'marketplace-import v3.2 — подключён новый поставщик'},
+  ],
+  rootFixed:s=>!s.poison&&s.lag<5000,
+  healthyExtra:s=>s.lag<5000,
+  v:{
+    dlq:['good','Воркер раз за разом падал на одном и том же offset: цена «12 990,00» в формате, который парсер не понимает. Перенос в DLQ разблокировал очередь, а сообщение можно разобрать утром.'],
+    consumers:s=>s.poison?['neutral','Топик читается в строгом порядке: пока это сообщение не обработано, новые консьюмеры ждут того же offset.']:['good','После разблокировки очереди дополнительные консьюмеры быстрее разобрали накопившийся лаг.'],
+    restart:['neutral','Рестарт api не трогает воркеры заказов.'],
+    rollback:['neutral','Код api не менялся — битые данные пришли из импорта.'],
+  },
+  hint:'Воркеры живы, но ничего не обрабатывают. На каком сообщении они падают — на разных или на одном?',
+  cause:'Новый поставщик через marketplace-import прислал цену строкой «12 990,00» — с пробелом и запятой. Событие заказа с этим товаром попало в order-events, воркер падал на нём при каждой попытке и повторял бесконечно. Порядок в партиции строгий, поэтому все заказы за ним встали.',
+  ideal:'Увидеть в логах воркера один и тот же offset с ошибкой десериализации → перенести сообщение в DLQ, чтобы очередь пошла. Утром — починить импорт и переобработать сообщение из DLQ.',
+  lessons:[
+    'Poison message: одно битое сообщение может остановить весь поток. Нужны лимит ретраев и dead letter queue.',
+    'Бесконечные ретраи без backoff и лимита — анти-паттерн, особенно в упорядоченных очередях.',
+    'Мониторь лаг асинхронных процессов: пользователь заметит проблему позже, но заметит.',
+    'Валидируй данные на входе (в импорте), а не в самом дальнем консьюмере.'
+  ]
+});
+(function(){
+  const bd=SCENARIOS.find(x=>x.id==='bad-deploy'),cr=SCENARIOS.find(x=>x.id==='cron');
+  SCENARIOS.push({
+    id:'combo', title:'Всё и сразу', diff:3,
+    blurb:'Падает оформление заказа и тормозит весь сайт. Одна причина или две?',
+    pager:'[CRITICAL] HighErrorRate, HighLatencyP99, PGConnectionsSaturated',
+    story:'Худшая ночь: падает оформление заказа и одновременно тормозит весь сайт. Кажется, всё началось почти в одно время.',
+    triggers:[{at:-16,fn:bd.trigger},{at:-11,fn:cr.trigger}],
+    changelog:[
+      {when:'пт 19:10',type:'deploy',text:'analytics-jobs v0.9 — «отчёт теперь учитывает события пользователей»'},
+      {when:'пт 21:05',type:'flag',text:'promo-banner включён для 100% — старт распродажи'},
+      {t:-18,type:'deploy',text:'api v2.14.0 — «промокоды: новая логика скидок» (автодеплой из main)'},
+      {t:-11,type:'cron',text:'nightly-analytics запущен по расписанию на primary'}],
+    rootFixed:s=>s.rolledBack&&!s.cronRunning&&!s.flags['nightly-analytics'],
+    v:Object.assign({},bd.v,cr.v,{restart:['neutral','Рестарт не лечит ни баг в коде, ни блокировки в базе.']}),
+    hint:'Здесь две независимые проблемы. Раздели симптомы: где ошибки (и какие), а где тормоза?',
+    cause:'Две независимые причины в одно время. Автодеплой api v2.14.0 принёс NullPointerException в расчёт промокодов — падал checkout. А обновлённая ночная аналитическая джоба держала блокировки на orders в primary — тормозило всё и заканчивались соединения.',
+    ideal:'Разделить симптомы: 500 с NPE в checkout → откат; ожидание блокировок и долгий запрос в postgres → выключить джобу и убить запрос. Порядок не важен, важно не остановиться после первого фикса.',
+    lessons:[
+      'У инцидента может быть больше одной причины. Если фикс помог частично, не ищи связь насильно — проверь, что осталось.',
+      'Разные сигнатуры — разные проблемы: 500 с исключением в коде и ожидание блокировок в базе.',
+      'В реальности второй инцидент стоит отдать второму дежурному: так быстрее и меньше ошибок.'
+    ]
+  });
+})();
+SCENARIOS.push(
+{
+  id:'lbconf', title:'Одна строчка', diff:1,
+  blurb:'Оформление заказа и поиск падают с 504. Код никто не трогал.',
+  pager:'[CRITICAL] HighErrorRate — lb 504',
+  story:'Ночью никто не деплоил код. Но часть запросов — чаще всего оформление заказа и поиск — возвращает 504.',
+  triggerAt:-13,
+  trigger(s){s.lbTimeout=true;},
+  changelog:[
+    {when:'ср 14:05',type:'deploy',text:'api v2.13.4 — мелкие правки корзины'},
+    {t:-35,type:'flag',text:'search-autocomplete-v3: 50% → 100%'},
+    {t:-14,type:'infra',text:'infra-config #4821: «оптимизация таймаутов nginx» (автоприменение GitOps)'},
+  ],
+  rootFixed:s=>!s.lbTimeout,
+  v:{
+    lbRevert:['good','В #4821 proxy_read_timeout поменяли с 60 с на 1 с. Всё, что api отвечает дольше секунды (оформление заказа, тяжёлый поиск), LB обрывал с 504 — хотя api честно отвечал 200. Откат конфига всё вернул.'],
+    rollback:['neutral','Код api не менялся — поменялся конфиг перед ним.'],
+    scaleUp:['neutral','API не перегружен: некоторые запросы законно идут дольше секунды.'],
+    'flag:search-autocomplete-v3':['neutral','Автодополнение — лёгкие запросы, 504 на них почти не было.'],
+    timeout:['neutral','Это таймаут api → внешние сервисы, а обрывал запросы таймаут LB → api.'],
+  },
+  hint:'Сравни логи балансировщика и api для одного и того же запроса. Кто из них считает, что всё хорошо?',
+  cause:'Изменение infra-config #4821 уменьшило proxy_read_timeout в nginx с 60 до 1 секунды. Оформление заказа и тяжёлый поиск обычно идут 1–2 секунды — LB обрывал их с 504, а api дорабатывал и отвечал 200 в пустоту. Коварная деталь: p99 на графике даже «улучшился», ведь медленные запросы теперь заканчивались за секунду.',
+  ideal:'Увидеть 504 в логах LB при 200 в логах api для тех же запросов, найти изменение конфига → откатить #4821.',
+  lessons:[
+    'Конфиг — это код: ему нужны ревью, канарейка и быстрый откат.',
+    'Метрики врут по-разному: p99 «улучшился», потому что его обрезал таймаут. Смотри ошибки и задержки и на LB, и в приложении.',
+    'Таймауты по цепочке должны убывать: клиент > LB > сервис > зависимости.'
+  ]
+},
+{
+  id:'hotkey', title:'Горячий товар', diff:2,
+  blurb:'В 03:00 стартовала флеш-распродажа — и сайт встал, хотя трафик почти обычный.',
+  pager:'[CRITICAL] HighLatencyP99, PostgresCPUHigh',
+  story:'В 03:00 стартовала ночная флеш-распродажа одного смартфона, пуш ушёл 800 тысячам человек. Запросов почти не прибавилось, но сайт тормозит и сыпет ошибками.',
+  triggerAt:-16,
+  trigger(s){s.hotKey=true;},
+  changelog:[
+    {when:'ср 14:05',type:'deploy',text:'api v2.13.4 — мелкие правки корзины'},
+    {t:-40,type:'infra',text:'redis-main: решардинг завершён (6 шардов)'},
+    {t:-17,type:'infra',text:'маркетинг: флеш-распродажа товара #77001, push на 800k пользователей'},
+  ],
+  rootFixed:s=>s.l1,
+  v:{
+    l1:['good','Все читали один ключ product:77001, а он живёт на одном шарде Redis — шард упёрся в CPU. Локальный кэш в памяти api забрал эту нагрузку на себя.'],
+    'l1:off':['bad','Выключил L1-кэш, и горячий ключ снова лёг на один шард.'],
+    scaleUp:['neutral','Больше подов — больше клиентов у того же перегруженного шарда.'],
+    ratelimit:['neutral','Нагрузка снизилась ценой 429 для всех, а горячий ключ никуда не делся.'],
+    warm:['neutral','Кэш и так тёплый: проблема не в промахах, а в одном перегруженном шарде.'],
+    'flag:promo-banner':['neutral','Баннер ведёт на распродажу, но выключение не остановит тех, кто уже пришёл по пушу.'],
+  },
+  hint:'Все запросы к Redis медленные — или про один ключ? Посмотри логи redis и api.',
+  cause:'Флеш-распродажа привела почти всех пользователей на одну карточку товара. Ключ product:77001 живёт на одном шарде Redis — шард упёрся в 100% CPU, чтения падали по таймауту и уходили в Postgres, и перегрузилась уже база. Недавний решардинг здесь бессилен: один ключ по шардам не размажешь.',
+  ideal:'Заметить в логах, что таймауты Redis всегда про один ключ и один шард → включить короткий L1-кэш в памяти api. На будущее — заранее прогревать и реплицировать горячие ключи.',
+  lessons:[
+    'Шардирование не спасает от горячего ключа: вся нагрузка на него идёт в один шард.',
+    'Короткий локальный кэш (1–5 с) снимает огромную нагрузку с горячих данных ценой небольшой устарелости.',
+    'Маркетинговые акции — это нагрузочные события. Инженеры должны знать о них заранее.'
+  ]
+},
+{
+  id:'clock', title:'Часы ушли', diff:2,
+  blurb:'Часть пользователей внезапно разлогинивает. Но не всех.',
+  pager:'[CRITICAL] Auth401Spike — api',
+  story:'Поддержка пишет: «выкидывает из аккаунта», «не могу войти». У других всё работает. 401 примерно на каждом седьмом запросе.',
+  triggerAt:-15,
+  trigger(s){s.skew=true;},
+  changelog:[
+    {when:'ср 14:05',type:'deploy',text:'api v2.13.4 — мелкие правки корзины'},
+    {t:-70,type:'infra',text:'сеть: обновлены firewall-правила подсети нод (закрыт «лишний» исходящий UDP)'},
+    {t:-30,type:'deploy',text:'auth-svc v4.1 — время жизни токена 30 → 15 мин'},
+  ],
+  rootFixed:s=>!s.skew,
+  v:{
+    ntp:['good','Нода node-7 потеряла синхронизацию времени: firewall закрыл UDP 123, и часы убежали на 94 секунды вперёд. Поды на ней считали свежие токены выданными «в будущем». Синхронизация времени всё вернула.'],
+    restart:['neutral','Поды переехали, но часть снова попала на node-7.'],
+    rollback:['neutral','Код api не менялся. Деплой auth-svc рядом — хорошая гипотеза, но 401 шли только с подов одной ноды.'],
+    scaleUp:['neutral','Новые поды частично легли на ту же ноду.'],
+  },
+  hint:'401 идут со всех подов или с части? Что общего у тех, которые отвечают 401?',
+  cause:'Обновление firewall закрыло исходящий UDP, а вместе с ним порт 123 (NTP). Часы на ноде node-7 постепенно ушли вперёд на полторы минуты. Поды api на этой ноде проверяли JWT и видели, что токен «выпущен в будущем», — отсюда 401. Остальные ноды пока держали время.',
+  ideal:'Заметить, что 401 идут с подов одной ноды, найти в логах «issued in the future» и предупреждение node-exporter про NTP → синхронизировать время. Утром — вернуть UDP 123 и завести алерт на рассинхрон часов.',
+  lessons:[
+    'Распределённые системы молча полагаются на синхронные часы: токены, TLS, блокировки с арендой, TTL.',
+    'Если ошибки только у части инстансов, ищи общее: нода, зона, версия, конфиг.',
+    'Проверка JWT делается с допуском на рассинхрон в несколько секунд — но не в минуты.'
+  ]
+},
+{
+  id:'connleak', title:'Тихая утечка', diff:2,
+  blurb:'Соединения к базе медленно кончаются. Ночью ничего не меняли.',
+  pager:'[CRITICAL] PGConnectionsSaturated',
+  story:'Соединений к Postgres всё больше, хотя трафик ночной и CPU базы в норме. Начали сыпаться ошибки «too many clients».',
+  setup(s){s.connLeak=true;s.leaked=150;s.version='v2.14.2';s.prevVersion='v2.14.1';},
+  changelog:[
+    {when:'ср 14:05',type:'deploy',text:'api v2.14.1 — мелкие правки корзины'},
+    {when:'пт 21:40',type:'deploy',text:'api v2.14.2 — «рефакторинг транзакций в OrderRepository»'},
+    {t:-15,type:'infra',text:'pgbouncer обновлён 1.21 → 1.22'},
+  ],
+  rootFixed:s=>!s.connLeak,
+  v:{
+    rollback:['good','Соединения «idle in transaction» от api копились с деплоя v2.14.2 в 21:40: новый код не закрывал транзакцию на ветке с ошибкой. Утечка медленная и выстрелила через пять часов. Откат её остановил.'],
+    restart:['neutral','Рестарт вернул соединения, но утечка тут же начала копить их снова.'],
+    kill:['neutral','Висящие транзакции убиты, соединения освободились — но утечка продолжилась.'],
+    scaleUp:['bad','Каждый новый под — новые соединения и новые утечки.'],
+  },
+  hint:'Что за соединения висят в базе и откуда? И когда это на самом деле началось — не обязательно этой ночью.',
+  cause:'Вечерний деплой v2.14.2 принёс рефакторинг транзакций: на ветке с исключением транзакция не закрывалась, и соединение оставалось «idle in transaction», не возвращаясь в пул. Утечка медленная — пул кончился через несколько часов, когда про деплой уже забыли. Обновление pgbouncer — случайное совпадение.',
+  ideal:'Посмотреть, что за соединения (idle in transaction, application_name=api), найти в логах leak detection с указанием на OrderRepository → откатить v2.14.2. Рестарт и убийство сессий помогают лишь на время.',
+  lessons:[
+    'Связь с деплоем может проявиться через часы: утечки не стреляют сразу.',
+    'Ближайшее по времени изменение (pgbouncer) не всегда виновник — проверяй гипотезу фактами.',
+    'Включай leak detection в пуле и idle_in_transaction_session_timeout в Postgres.'
+  ]
+},
+{
+  id:'az', title:'Потерянная зона', diff:3,
+  blurb:'Треть запросов падает по таймауту, а health checks зелёные.',
+  pager:'[CRITICAL] HighErrorRate — api 5xx ~30%',
+  story:'Ошибки ровно у трети запросов, а деплоев ночью не было. Балансировщик считает все поды здоровыми.',
+  triggerAt:-9,
+  trigger(s){s.azDown=true;},
+  changelog:[
+    {when:'вт 10:00',type:'infra',text:'k8s: поды api равномерно распределены по зонам a/b/c'},
+    {when:'ср 14:05',type:'deploy',text:'api v2.13.4 — мелкие правки корзины'},
+    {t:-7,type:'ext',text:'статус облака: «Degraded networking in eu-central-1b»'},
+  ],
+  rootFixed:s=>s.azDrained,
+  v:{
+    drainAz:['good','Поды в AZ-b не видели базу в AZ-a, но health check /healthz не проверял зависимости — LB продолжал слать туда треть трафика. Увод зоны убрал ошибки.'],
+    'drainAz:off':s=>s.azDown?['bad','Вернул трафик в сломанную зону.']:['neutral','Трафик возвращён в зону.'],
+    scaleUp:s=>s.azDrained?['good','После увода зоны оставшимся подам нужна мощность — добавить поды правильно.']:['neutral','Треть новых подов попала в ту же сломанную зону.'],
+    failover:['bad','Primary в AZ-a был жив. Реплика в изолированной AZ-b после продвижения стала вторым primary: split brain и расхождение данных.'],
+    restart:['neutral','Поды перезапустились в тех же зонах.'],
+  },
+  hint:'Ошибки у всех подов или у части? Что общего у тех, кто не может достучаться до базы?',
+  cause:'В зоне eu-central-1b деградировала сеть: поды api в ней потеряли связь с Postgres в зоне a. Health check /healthz проверял только, что процесс жив, поэтому балансировщик продолжал слать в AZ-b треть трафика — и эти запросы падали по таймауту.',
+  ideal:'Заметить, что ошибки только у подов AZ-b, и связать со статусом облака → увести трафик из зоны и добавить мощности в оставшихся. Не делать failover базы: primary жив, будет split brain.',
+  lessons:[
+    'Проектируй под потерю зоны: запас мощности по зонам и быстрый способ увести трафик.',
+    'Health check должен отражать способность обслуживать запросы — но так, чтобы сбой общей зависимости не выключил все поды разом.',
+    'Частичные сбои сети опаснее полных: всё выглядит живым.',
+    'Failover базы при сетевом разделении — классический путь к split brain.'
+  ]
+});
+SCENARIOS.sort((a,b)=>a.diff-b.diff);
+
+function newState(sc){
+  const s={t:-HIST,replicas:6,cacheHit:0.92,extLat:180,timeout:5,cb:false,rateLimit:false,bug:0,rolledBack:false,
+    version:'v2.13.4',prevVersion:'v2.13.3',mem:50,
+    flags:{'recs-v2':false,'nightly-analytics':true,'search-autocomplete-v3':true,'promo-banner':true},
+    cronRunning:false,cronStartT:null,cronRetryAt:null,prevErr:0.002,failoverUntil:-999,restartUntil:-999,dataLoss:false,
+    budget:100,pending:[],hist:[],logs:[],taken:[],youChanges:[],hints:0,streak:0,lastOom:-999,oomCount:0,replicaTicks:0,
+    m:null,over:null,alertSince:{},
+    disk:61,walBroken:false,diskExpands:0,certExpired:false,bots:false,waf:false,poison:false,lag:50,consumers:4,
+    hotKey:false,l1:false,skew:false,azDown:false,azDrained:false,lbTimeout:false,lbReverted:false,connLeak:false,leaked:0};
+  sc.setup&&sc.setup(s);
+  return s;
+}
+
+function addLog(s,svc,lvl,msg){s.logs.push({t:s.t,sec:rint(0,59),svc,lvl,msg});}
+
+function step(s,sc){
+  const due=s.pending.filter(p=>p.at<=s.t);s.pending=s.pending.filter(p=>p.at>s.t);
+  due.forEach(p=>p.fn(s));
+  (sc.triggers||[{at:sc.triggerAt,fn:sc.trigger}]).forEach(x=>{if(x.at===s.t)x.fn(s);});
+  if(!s.cronRunning&&s.cronRetryAt!==null&&s.t>=s.cronRetryAt){
+    if(s.flags['nightly-analytics']){s.cronRunning=true;s.cronStartT=s.t;addLog(s,'cron','WARN','nightly-analytics: предыдущий запуск прерван, повторная попытка (retry 1/5)');}
+    s.cronRetryAt=null;
+  }
+  s.mem+=(s.flags['recs-v2']?4.4:0.08)+rnd(-.4,.4);
+  if(s.walBroken)s.disk+=1.3+rnd(-.1,.1);else if(s.disk>61.5)s.disk=Math.max(61,s.disk-6);
+  s.disk=clamp(s.disk,20,100);const diskFull=s.disk>=100;
+  if(s.poison)s.lag+=1800+rint(-60,60);else s.lag=Math.max(rint(20,90),s.lag+1800-s.consumers*1500);
+  if(s.connLeak)s.leaked+=8+rnd(-1,1);
+  let oom=false;if(s.mem>=100){oom=true;s.mem=40+rnd(0,3);s.lastOom=s.t;s.oomCount++;}
+  s.mem=clamp(s.mem,30,100);
+
+  const users=1200*(1+rnd(-.035,.035))*(1+1.3*s.prevErr);
+  const bot=(s.bots&&!s.waf)?1900*(1+rnd(-.05,.05)):0;
+  const offered=users+bot;
+  const eff=s.rateLimit?Math.min(offered,520):offered;
+  const shed=(offered-eff)/offered;
+  const timeoutMs=s.timeout*1000;
+  const extLat=s.extLat*(1+rnd(-.05,.05));
+  const attempts=(!s.cb&&extLat>timeoutMs)?3:1;
+  const extEff=Math.min(extLat,timeoutMs);
+  const block=s.cb?0:0.1*(extEff/1000)*attempts/0.25;
+  const gc=s.mem>80?1+(s.mem-80)/12:1;
+  const appUtil=eff/(s.replicas*320*(s.azDrained?2/3:1))*(1+block)*(s.mem>80?1+(s.mem-80)/40:1);
+  const cronLoad=s.cronRunning?560:0;
+  const botShare=bot/offered;
+  const hit=(s.hotKey&&!s.l1)?s.cacheHit*0.7:s.cacheHit;
+  const dbUtil=(eff*(1-botShare)*((1-hit)*2+0.08)+eff*botShare*0.3+cronLoad)/600;
+  const lock=s.cronRunning?0.9:0;
+  const connMax=500;
+  const connDemand=s.replicas*60*Math.min(1.45,0.3+Math.min(dbUtil,2)*0.4+lock)+s.leaked;
+  let core=90*(appUtil<0.8?1:1+(appUtil-0.8)*6)*(dbUtil<0.75?1:1+(dbUtil-0.75)*9)*gc+(s.cronRunning?1900:0);
+  if(connDemand>connMax)core+=1200;
+  if(s.hotKey&&!s.l1)core+=350;
+  if(s.azDown&&!s.azDrained)core=Math.max(core,3050);
+  let p99=s.cb?core:Math.max(core,extEff*attempts*0.95);
+  p99=clamp(p99*rnd(.95,1.05),40,30000);
+  if(s.lbTimeout)p99=Math.min(p99,1000+rnd(0,15));
+  const parts=[0.002,
+    appUtil>1?Math.min(.95,(appUtil-1)/appUtil):0,
+    dbUtil>1?Math.min(.9,(dbUtil-1)/dbUtil)*0.9:0,
+    connDemand>connMax?(connDemand-connMax)/connDemand*0.6:0,
+    s.bug,
+    s.cb?0.004:(attempts>1?0.1:0),
+    oom?0.32:0,
+    shed*0.5,
+    s.t<s.restartUntil?0.03:0,
+    s.t<s.failoverUntil?0.45:0,
+    s.certExpired?0.22:0,
+    diskFull?0.3:0,
+    (s.waf&&!s.bots)?0.04:0,
+    s.lag>60000?0.12:0,
+    (s.hotKey&&!s.l1)?0.06:0,
+    s.skew?0.15:0,
+    (s.azDown&&!s.azDrained)?0.3:0,
+    s.lbTimeout?0.12:0];
+  let ok=1;parts.forEach(x=>ok*=(1-x));
+  const err=clamp(1-ok+rnd(-.001,.001),0,1);
+  const m={t:s.t,offered,eff,shed,p99,err,appUtil,dbUtil,cacheHit:s.cacheHit,mem:s.mem,conn:Math.min(connDemand,connMax),connDemand,connMax,
+    ext:s.cb?null:extEff,attempts,oom,cron:s.cronRunning,replicas:s.replicas,disk:s.disk,lag:s.lag,bot};
+  if(s.cacheHit<0.92){const fill=dbUtil<1.7?0.03+0.1*(1.7-dbUtil)/1.7:0.003;s.cacheHit=Math.min(0.92,s.cacheHit+fill);}
+  s.prevErr=err;s.m=m;s.hist.push(m);if(s.hist.length>TREND+4)s.hist.shift();
+  genLogs(s,m);
+  if(s.logs.length>220)s.logs.splice(0,s.logs.length-220);
+
+  if(s.t>=0){
+    s.budget-=err*6+(p99>1000?0.5:0)+(p99>5000?0.7:0)+(s.lag>20000?0.8:0);
+    s.replicaTicks+=Math.max(0,s.replicas-6);
+    const healthy=err<0.02&&p99<700&&dbUtil<0.95&&(!sc.healthyExtra||sc.healthyExtra(s));
+    s.streak=(sc.rootFixed(s)&&healthy)?s.streak+1:0;
+    if(s.streak>=4)s.over='win';
+    else if(s.budget<=0){s.budget=0;s.over='budget';}
+    else if(s.t>=MAX_T)s.over='time';
+  }
+  s.t++;
+}
+
+function genLogs(s,m){
+  const add=(svc,lvl,msg)=>addLog(s,svc,lvl,msg);
+  const eps=['GET /api/catalog?page=2','GET /api/product/'+rint(1000,99999),'POST /api/cart/items','GET /api/search?q=кроссовки','GET /api/home'];
+  const n=m.err>0.3?1:2;
+  for(let i=0;i<n;i++)add('api','INFO',`${pick(eps)} 200 ${Math.round(Math.min(m.p99,9000)*rnd(.08,.4))}ms`);
+  if(!m.ext===false&&m.attempts===1&&Math.random()<.4&&!s.cb)add('paybridge-client','INFO',`POST https://api.paybridge.io/v2/charge 200 ${Math.round(m.ext)}ms`);
+  if(s.bug>0){add('checkout','ERROR',`NullPointerException: promo.getRules() is null\n    at PromoService.applyDiscount(PromoService.java:88)\n    at CheckoutController.submit(CheckoutController.java:141)  [${s.version}]`);add('api','ERROR',`POST /api/checkout 500 (${s.version})`);}
+  if(m.cacheHit<0.7)add('api','WARN',`cache MISS product:${rint(1000,99999)} → запрос в Postgres`);
+  if(m.cacheHit<0.6&&Math.random()<.5)add('redis','INFO',`INFO stats: keyspace_hits=${rint(900,4000)} keyspace_misses=${rint(20000,60000)} used_memory=${(0.3+m.cacheHit*3).toFixed(1)}G uptime=${s.t+11}m`);
+  if(m.dbUtil>1)add('api','WARN',`db-pool: timeout acquiring connection after 3000ms (active=${Math.round(m.conn/s.replicas)}, waiting=${rint(40,300)})`);
+  if(m.dbUtil>0.9&&!s.cronRunning)add('postgres','LOG',`duration: ${rint(1500,6000)} ms  statement: SELECT * FROM products WHERE id = $1`);
+  if(m.connDemand>m.connMax)add('postgres','FATAL','sorry, too many clients already (max_connections=500)');
+  if(m.attempts>1){add('paybridge-client','WARN',`timeout after ${s.timeout*1000}ms POST https://api.paybridge.io/v2/charge (attempt ${rint(1,3)}/3)`);}
+  if(m.appUtil>1)add('api','ERROR',`thread pool "http-worker" exhausted: 200/200 busy, queue ${rint(300,999)}, rejecting request`);
+  if(s.cb&&Math.random()<.6)add('paybridge-client','INFO','circuit OPEN → fail fast; платёж поставлен в очередь payments-retry');
+  if(m.oom)add('k8s','ERROR',`Pod api-7f9c${rint(10,99)}-${Math.random().toString(36).slice(2,7)} OOMKilled (memory limit 2Gi), restarting`);
+  if(m.mem>80)add('api','WARN',`GC pause ${Math.round((m.mem-75)*90)}ms, heap used ${Math.round(m.mem)}%`);
+  if(s.flags['recs-v2']&&Math.random()<.55)add('recs','DEBUG',`RecsV2 in-memory user cache: ${(m.mem*0.03+0.1).toFixed(2)}M entries (evictions: 0)`);
+  if(s.cronRunning){
+    add('postgres','LOG',`process ${rint(4000,4999)} still waiting for RowExclusiveLock on relation "orders" after 5000.${rint(100,999)} ms`);
+    if(Math.random()<.55)add('cron','INFO',`nightly-analytics: step 3/7 — SELECT … FROM orders o JOIN events e ON e.user_id = o.user_id … (running ${s.t-s.cronStartT+1} min)`);
+  }
+  if(s.walBroken){if(Math.random()<.75)add('postgres','LOG',`archive command failed with exit code 1: upload of WAL 0000000100000A1F000000${rint(10,99)} to s3://polka-pg-wal failed: AccessDenied (InvalidAccessKeyId)`);
+    if(Math.random()<.4)add('postgres','WARN',`archiver is falling behind: ${Math.round((s.disk-61)*40)} WAL segments pending`);}
+  if(m.disk>=100){add('postgres','ERROR','could not extend file "base/16384/24591": No space left on device');add('api','ERROR','POST /api/cart/items 500: PSQLException: No space left on device');}
+  if(s.certExpired){add('api','ERROR',`search-client: GET https://search-svc.internal/v1/query: x509: certificate has expired or is not yet valid: current time ${fmt(s.t)}:${String(rint(0,59)).padStart(2,'0')} is after 03:00:00`);
+    if(Math.random()<.6)add('search-svc','WARN',`http: TLS handshake error from 10.4.${rint(1,9)}.${rint(2,250)}: remote error: tls: bad certificate`);
+    add('api','ERROR','GET /api/search?q=… 502: upstream search-svc unavailable');}
+  if(m.bot>0){add('lb','INFO',`top clients (1 мин): 185.220.101.0/24 AS208091 HostCloud — ${Math.round(m.bot/m.offered*100)}% запросов, UA python-requests/2.31`);
+    add('api','INFO',`GET /api/search?q=&sort=price_asc&page=${rint(200,9000)} 200 ${Math.round(Math.min(m.p99,9000)*rnd(.3,.9))}ms`);}
+  if(s.waf&&Math.random()<.5)add('waf','INFO',s.bots?`blocked ${rint(1700,2000)} req/s from 185.220.101.0/24`:`blocked ${rint(40,120)} req/s from 5.18.0.0/16 (мобильный оператор, NAT)`);
+  if(s.poison){add('order-worker','ERROR','order-events p0 offset 88213491: JsonMappingException: Cannot deserialize value of type `BigDecimal` from String "12 990,00"');
+    if(Math.random()<.6)add('order-worker','WARN',`retrying offset 88213491 (attempt ${2400+s.t*12+rint(0,11)})`);}
+  else if(Math.random()<.3)add('order-worker','INFO',`order-events: processed ${rint(1700,2900)} msgs/min, lag ${Math.round(m.lag)}`);
+  if(m.lag>60000)add('api','ERROR','POST /api/checkout 503: kafka producer: buffer exhausted, send timeout (order-events)');
+  if(s.hotKey&&!s.l1){add('api','WARN',`redis timeout 250ms reading product:77001 (shard-3) → fallback to Postgres`);if(Math.random()<.6)add('redis','WARN',`slowlog: GET product:77001 — shard-3 CPU 100%, ${rint(88,99)}k ops/s (остальные шарды ~${rint(8,14)}k)`);}
+  if(s.skew){add('api','ERROR',`[api-7f9c-${pick(['q2x','k8d'])} node-7] JWT validation failed: token issued in the future (iat skew +${rint(92,97)}s) → 401`);if(Math.random()<.35)add('node-exporter','WARN','node-7: timex sync status unsynchronized, clock offset +94.2s');}
+  if(s.azDown&&!s.azDrained){add('api','ERROR',`[api-7f9c-${pick(['b1','b2'])} az-b] db-pool: connect timeout pg-1.az-a:5432 after 3000ms`);if(Math.random()<.5)add('lb','INFO',`healthcheck /healthz: ${s.replicas}/${s.replicas} targets healthy`);}
+  if(s.lbTimeout){add('lb','ERROR',`upstream timed out (110) while reading response header from upstream api:8080, request: "${pick(['POST /api/checkout','GET /api/search?q=куртка&sort=rating'])}", 504 after 1.000s`);add('api','INFO',`POST /api/checkout 200 ${rint(1100,2400)}ms`);}
+  if(s.connLeak){if(Math.random()<.55)add('postgres','LOG',`pg_stat_activity: ${Math.round(s.leaked)} соединений в состоянии "idle in transaction" (application_name=api)`);if(Math.random()<.55)add('api','WARN',`hikari: connection leak detected, not returned after 30s: at OrderRepository.findRecentOrders(OrderRepository.java:212) [${s.version}]`);}
+  if(m.shed>0)add('lb','INFO',`rate limit: 429 → ${Math.round(m.offered-m.eff)} req/s`);
+  if(m.err>0.05&&Math.random()<.5)add('lb','WARN',`upstream api: ${(m.err*100).toFixed(1)}% ошибок за последнюю минуту`);
+}
+
+const ACTIONS=[
+  {group:'API',id:'rollback',ic:'⏪',name:()=>'Откатить деплой api',ds:s=>`${s.version} → ${s.prevVersion}, ~3 мин`,dis:s=>s.rolledBack,
+    run(s){s.pending.push({at:s.t+3,label:`Откат api → ${s.prevVersion}`,fn:s=>{s.version=s.prevVersion;s.bug=0;s.connLeak=false;s.leaked=0;s.rolledBack=true;s.mem=Math.min(s.mem,42);s.restartUntil=s.t+1;addLog(s,'k8s','INFO',`deployment/api rolled back to ${s.version}`);}});return `Откат запущен`;}},
+  {group:'API',id:'scaleUp',ic:'＋',name:()=>'Добавить 3 пода api',ds:s=>`сейчас ${s.replicas}, ~2 мин на старт`,dis:s=>s.replicas>=15,
+    run(s){s.pending.push({at:s.t+2,label:'Старт 3 новых подов',fn:s=>{s.replicas+=3;addLog(s,'k8s','INFO',`deployment/api scaled to ${s.replicas} replicas`);}});return 'Масштабирование запущено';}},
+  {group:'API',id:'scaleDown',ic:'－',name:()=>'Убрать 3 пода api',ds:s=>`сейчас ${s.replicas}`,dis:s=>s.replicas<=3,
+    run(s){s.replicas-=3;addLog(s,'k8s','INFO',`deployment/api scaled to ${s.replicas} replicas`);return 'Поды удалены';}},
+  {group:'API',id:'restart',ic:'↻',name:()=>'Rolling restart api',ds:()=>'~1 мин, ненадолго +ошибки',
+    run(s){s.pending.push({at:s.t+1,label:'Rolling restart',fn:s=>{s.mem=40+rnd(0,3);s.leaked=0;s.restartUntil=s.t+1;addLog(s,'k8s','INFO','deployment/api rollout restart complete');}});return 'Рестарт запущен';}},
+  {group:'Кэш',id:'flush',ic:'⌫',name:()=>'Сбросить кэш Redis',ds:()=>'FLUSHALL',
+    run(s){s.cacheHit=0.02;addLog(s,'redis','WARN','FLUSHALL выполнен вручную');return 'Кэш сброшен';}},
+  {group:'Кэш',id:'warm',ic:'♨',name:()=>'Прогреть кэш',ds:()=>'топ-10k ключей, ~2 мин',
+    run(s){s.pending.push({at:s.t+2,label:'Прогрев кэша',fn:s=>{if(s.m.dbUtil<1.8){s.cacheHit=Math.min(0.92,s.cacheHit+0.3);addLog(s,'redis','INFO','cache-warmer: загружено 10000/10000 ключей');}else addLog(s,'redis','ERROR','cache-warmer: timeout от Postgres, загружено 212/10000 ключей');}});return 'Прогрев запущен';}},
+  {group:'Кэш',id:'l1',toggle:s=>s.l1,ic:'◔',name:s=>s.l1?'Выключить L1-кэш в api':'Включить L1-кэш в api',ds:()=>'локальный кэш в памяти на 5 с для частых ключей',
+    run(s){s.l1=!s.l1;addLog(s,'api','INFO',s.l1?'L1 in-process cache enabled (ttl 5s, 10k keys)':'L1 in-process cache disabled');return s.l1?'L1-кэш включён':'L1-кэш выключен';}},
+  {group:'Трафик и зависимости',id:'ratelimit',toggle:s=>s.rateLimit,ic:'⛔',name:s=>s.rateLimit?'Снять rate limit':'Включить rate limit на LB',ds:()=>'не больше 520 req/s, лишнее → 429',
+    run(s){s.rateLimit=!s.rateLimit;return s.rateLimit?'Rate limit включён':'Rate limit снят';}},
+  {group:'Трафик и зависимости',id:'cb',toggle:s=>s.cb,ic:'⏚',name:s=>s.cb?'Закрыть circuit breaker':'Открыть circuit breaker → paybridge',ds:()=>'fail fast, платежи в очередь',
+    run(s){s.cb=!s.cb;addLog(s,'paybridge-client','INFO',s.cb?'circuit breaker forced OPEN':'circuit breaker CLOSED');return s.cb?'Circuit breaker открыт':'Circuit breaker закрыт';}},
+  {group:'Трафик и зависимости',id:'timeout',toggle:s=>s.timeout!==5,ic:'⏱',name:s=>s.timeout===5?'Таймаут к внешним API 5 с → 15 с':'Вернуть таймаут 5 с',ds:()=>'3 попытки на запрос',
+    run(s){s.timeout=s.timeout===5?15:5;return `Таймаут: ${s.timeout} с`;}},
+  {group:'Трафик и зависимости',id:'waf',toggle:s=>s.waf,ic:'⛨',name:s=>s.waf?'Снять блокировку на WAF':'Заблокировать топ-подсети на WAF',ds:()=>'по топу клиентов из логов LB',
+    run(s){s.waf=!s.waf;addLog(s,'waf','INFO',s.waf?'block rule added: top-3 client subnets':'block rule removed');return s.waf?'Подсети заблокированы':'Блокировка снята';}},
+  {group:'База данных',id:'kill',ic:'✕',name:()=>'Убить долгие запросы в Postgres',ds:()=>'pg_terminate_backend для > 60 с',
+    run(s){let msg='Долгих запросов не найдено';if(s.leaked>0){s.leaked=0;msg='Убиты висящие транзакции';addLog(s,'postgres','LOG','terminated idle-in-transaction sessions (application_name=api)');}s.restartUntil=Math.max(s.restartUntil,s.t+1);
+      if(s.cronRunning){s.cronRunning=false;s.cronRetryAt=s.t+4;addLog(s,'postgres','LOG','terminating connection due to administrator command (pid 4102, application_name=nightly-analytics)');addLog(s,'cron','ERROR','nightly-analytics: connection terminated, job failed; retry scheduled in 4 min');msg='Убит 1 долгий запрос';}
+      else addLog(s,'postgres','LOG',`terminating ${rint(3,12)} connections due to administrator command`);return msg;}},
+  {group:'База данных',id:'failover',ic:'⇄',name:()=>'Failover Postgres на реплику',ds:()=>'~3 мин без записи',
+    run(s){s.failoverUntil=s.t+3;if(s.azDown&&!s.azDrained){s.dataLoss=true;addLog(s,'postgres','ERROR','pg-2 (az-b) promoted while pg-1 still accepting writes: two primaries');}if(s.cronRunning){s.dataLoss=true;addLog(s,'postgres','WARN','replica lag 184 s at promotion — possible data loss');}addLog(s,'postgres','WARN','failover initiated: promoting replica pg-2');return 'Failover запущен';}},
+  {group:'База данных',id:'expandDisk',ic:'⛁',name:()=>'Расширить диск Postgres',ds:s=>`+100 ГБ, ~2 мин (сейчас ${Math.round(s.disk)}%)`,dis:s=>s.diskExpands>=3,
+    run(s){s.diskExpands++;const n=s.diskExpands;s.pending.push({at:s.t+2,label:'Расширение диска',fn:s=>{s.disk=Math.max(35,s.disk-22);addLog(s,'postgres','INFO',`volume pg-1-data resized online: ${350+100*n}G → ${450+100*n}G`);}});return 'Расширение диска запущено';}},
+  {group:'Платформа',id:'secrets',ic:'⚿',name:()=>'Перечитать секреты из Vault',ds:()=>'сервисы подхватят актуальные ключи, ~1 мин',
+    run(s){s.pending.push({at:s.t+1,label:'Перечитывание секретов',fn:s=>{addLog(s,'vault-agent','INFO','secrets re-rendered for 14 services, SIGHUP sent');if(s.walBroken){s.walBroken=false;addLog(s,'postgres','LOG',`archiver: archive command succeeded, catching up on ${rint(900,1500)} WAL segments`);}}});return 'Секреты перечитываются';}},
+  {group:'Платформа',id:'certs',ic:'⚷',name:()=>'Перевыпустить TLS-сертификаты',ds:()=>'cert-manager renew для внутренних сервисов, ~2 мин',
+    run(s){s.pending.push({at:s.t+2,label:'Перевыпуск сертификатов',fn:s=>{s.certExpired=false;addLog(s,'cert-manager','INFO','certificates renewed: 9 (search-svc.internal, api.internal, …)');}});return 'Перевыпуск запущен';}},
+  {group:'Платформа',id:'ntp',ic:'◷',name:()=>'Синхронизировать время на нодах',ds:()=>'принудительный chrony sync, ~1 мин',
+    run(s){s.pending.push({at:s.t+1,label:'Синхронизация времени',fn:s=>{addLog(s,'node-exporter','INFO',s.skew?'node-7: clock stepped -94.2s, synchronized':'all nodes: offset < 5ms, nothing to do');s.skew=false;}});return 'Синхронизация запущена';}},
+  {group:'Платформа',id:'lbRevert',ic:'↶',name:()=>'Откатить последний конфиг LB',ds:()=>'git revert в infra-config, ~1 мин',dis:s=>s.lbReverted,
+    run(s){s.lbReverted=true;s.pending.push({at:s.t+1,label:'Откат конфига LB',fn:s=>{s.lbTimeout=false;addLog(s,'lb','INFO','nginx config reloaded (revert of last infra-config change)');}});return 'Откат конфига запущен';}},
+  {group:'Платформа',id:'drainAz',toggle:s=>s.azDrained,ic:'⊘',name:s=>s.azDrained?'Вернуть трафик в зону AZ-b':'Увести трафик из зоны AZ-b',ds:()=>'LB перестанет слать запросы в поды AZ-b',
+    run(s){s.azDrained=!s.azDrained;addLog(s,'lb','INFO',s.azDrained?'zone eu-central-1b drained: 0% traffic':'zone eu-central-1b: traffic restored');return s.azDrained?'Зона AZ-b выведена':'Зона AZ-b возвращена';}},
+  {group:'Очереди',id:'dlq',ic:'⤼',name:()=>'Перенести сбойные сообщения в DLQ',ds:()=>'сообщения, упавшие больше 5 раз',
+    run(s){if(s.poison){s.poison=false;addLog(s,'order-worker','WARN','offset 88213491 moved to order-events.dlq after 2931 attempts');return '1 сообщение перенесено в DLQ';}addLog(s,'order-worker','INFO','no messages over retry limit');return 'Сбойных сообщений нет';}},
+  {group:'Очереди',id:'consumers',ic:'⇶',name:()=>'Добавить 3 консьюмера заказов',ds:s=>`сейчас ${s.consumers}, ~1 мин`,dis:s=>s.consumers>=13,
+    run(s){s.pending.push({at:s.t+1,label:'Старт консьюмеров',fn:s=>{s.consumers+=3;addLog(s,'order-worker','INFO',`consumer group order-processing: ${s.consumers} members, rebalance complete`);}});return 'Консьюмеры запускаются';}},
+];
+
+function verdictFor(sc,key,s){
+  let v=sc.v[key]!==undefined?sc.v[key]:DEFAULT_V[key];
+  if(typeof v==='function')v=v(s);
+  if(!v){
+    if(key.startsWith('flag:')){const on=key.endsWith(':on');v=on?['neutral','Флаг включён обратно.']:['neutral','Этот флаг не был связан с инцидентом.'];}
+    else v=['neutral','Не повлияло на причину инцидента.'];
+  }
+  return v;
+}
+
+function doAction(s,sc,id){
+  const a=ACTIONS.find(x=>x.id===id);if(!a||(a.dis&&a.dis(s))||s.over)return null;
+  const wasOn=a.toggle?a.toggle(s):false;
+  const key=a.toggle&&wasOn?id+':off':id;
+  const label=typeof a.name==='function'?a.name(s):a.name;
+  const verdict=verdictFor(sc,key,s);
+  const msg=a.run(s);
+  s.taken.push({t:s.t,key,label,verdict});s.youChanges.push({t:s.t,text:label});
+  return msg;
+}
+function toggleFlag(s,sc,f){
+  if(s.over)return null;
+  const on=!s.flags[f];s.flags[f]=on;
+  const key='flag:'+f+(on?':on':'');
+  let verdict=verdictFor(sc,on?key:'flag:'+f,s);
+  if(on&&sc.id==='leak'&&f==='recs-v2')verdict=['bad','Утекающий флаг включён обратно.'];
+  const label=`Флаг ${f} → ${on?'вкл':'выкл'}`;
+  s.taken.push({t:s.t,key,label,verdict});s.youChanges.push({t:s.t,text:label});
+  addLog(s,'flags','INFO',`flag ${f} set to ${on} by oncall`);
+  return label;
+}
+function score(s){
+  const bad=s.taken.filter(x=>x.verdict[0]==='bad').length;
+  let sc=1000+Math.round(s.budget*4)-Math.max(0,s.t)*9-bad*100-s.hints*120-(s.dataLoss?300:0)-Math.round(s.replicaTicks*1.5);
+  if(s.over!=='win')sc=Math.min(sc,300);
+  return Math.max(0,sc);
+}
+function presim(s,sc){while(s.t<0)step(s,sc);}
+</script>
+
+<script>
+/* ================= UI ================= */
+const $=id=>document.getElementById(id);
+let SC=null,S=null,timer=null,paused=false,speedIdx=0;const SPEEDS=[2500,1200];
+let logSvc='',logWarn=false;
+
+function loadBest(){try{return JSON.parse(localStorage.getItem('oncall-best')||'{}')}catch(e){return{}}}
+function saveBest(id,v){try{const b=loadBest();if(!b[id]||b[id]<v){b[id]=v;localStorage.setItem('oncall-best',JSON.stringify(b));}}catch(e){}}
+
+function toast(msg){const t=$('toast');t.textContent=msg;t.hidden=false;clearTimeout(toast._t);toast._t=setTimeout(()=>t.hidden=true,3200);}
+const pct=x=>(x*100).toFixed(x<0.1?1:0)+'%';
+const esc=x=>String(x).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+/* ---------- menu ---------- */
+function showMenu(){
+  stop();$('bar').hidden=true;$('game').hidden=true;
+  const best=loadBest();
+  $('ovCard').innerHTML=`
+    <h1>Дежурный</h1>
+    <p>Ты — дежурный инженер интернет-магазина. Ночью срабатывает пейджер: прод горит. По алертам, метрикам, логам и журналу изменений найди причину и почини — пока пользователи не исчерпали терпение.</p>
+    <ul class="howto">
+      <li>Время идёт: одна игровая минута — пара секунд. Пауза — пробел, в паузе можно спокойно читать логи.</li>
+      <li>Действия срабатывают с задержкой, как в жизни. Неверные шаги могут сделать хуже.</li>
+      <li>Победа — причина устранена и система здорова 4 минуты подряд. Разбор ошибок — в конце.</li>
+    </ul>
+    <h2>Выбери смену</h2>
+    <div class="scgrid">${SCENARIOS.map(sc=>`
+      <button class="sc" data-sc="${sc.id}"><b>${esc(sc.title)}</b><span class="d">${esc(sc.blurb)}</span>
+      <span class="meta"><span class="dots">${[1,2,3].map(i=>`<i class="${i<=sc.diff?'f':''}"></i>`).join('')}</span><span>${best[sc.id]?'рекорд '+best[sc.id]:'не пройдено'}</span></span></button>`).join('')}
+      <button class="sc" data-sc="random"><b>Случайная смена</b><span class="d">Не знаешь, что сломалось. Как в реальности.</span><span class="meta"><span>?</span><span></span></span></button>
+    </div>
+    <div class="row"><button class="btn" id="bTheme">Тема: ${document.documentElement.dataset.theme==='light'?'светлая':document.documentElement.dataset.theme==='dark'?'тёмная':'как в системе'}</button></div>`;
+  $('ov').hidden=false;
+  $('ovCard').querySelectorAll('[data-sc]').forEach(b=>b.onclick=()=>{
+    let id=b.dataset.sc;const random=id==='random';if(random)id=pick(SCENARIOS).id;brief(id,random);});
+  $('bTheme').onclick=()=>{const r=document.documentElement;const cur=r.dataset.theme||'';const next=cur===''?'dark':cur==='dark'?'light':'';
+    if(next)r.dataset.theme=next;else delete r.dataset.theme;try{localStorage.setItem('oncall-theme',next)}catch(e){}showMenu();};
+}
+
+function brief(id,random){
+  SC=SCENARIOS.find(x=>x.id===id);SC._random=random;
+  $('ovCard').innerHTML=`
+    <p class="muted">Суббота, 03:17</p>
+    <div class="pagerscreen"><div class="big">📟 ${esc(SC.pager)}</div><div>полка.ру · prod · on-call: ты</div></div>
+    <p>${esc(random?'Пейджер разбудил тебя посреди ночи. Разберись, что происходит.':SC.story)}</p>
+    <p class="muted">Подсказка тимлида доступна по кнопке 📞, но стоит очков.</p>
+    <div class="row"><button class="btn primary" id="bGo">Принять инцидент</button><button class="btn" id="bBack">Назад</button></div>`;
+  $('bGo').onclick=()=>start();$('bBack').onclick=showMenu;$('bGo').focus();
+}
+
+function start(){
+  S=newState(SC);presim(S,SC);
+  $('ov').hidden=true;$('bar').hidden=false;$('game').hidden=false;
+  $('scnName').textContent=SC._random?'Случайная смена':SC.title;
+  $('scnSub').textContent='полка.ру · prod';
+  const svcs=['node-exporter','api','checkout','postgres','redis','paybridge-client','search-svc','order-worker','k8s','cron','recs','lb','waf','vault-agent','cert-manager','flags'];
+  $('logSvc').innerHTML='<option value="">все сервисы</option>'+svcs.map(x=>`<option>${x}</option>`).join('');
+  logSvc='';logWarn=false;$('logWarn').checked=false;
+  paused=false;render();run();window.scrollTo(0,0);
+}
+function run(){stop();timer=setInterval(tick,SPEEDS[speedIdx]);updCtl();}
+function stop(){clearInterval(timer);timer=null;}
+function tick(){if(!S||S.over||paused)return;step(S,SC);render();if(S.over)finish();}
+function updCtl(){$('bPause').textContent=paused?'▶ Дальше':'⏸ Пауза';$('bSpeed').textContent=(speedIdx+1)+'×';}
+
+/* ---------- render ---------- */
+function render(){
+  const s=S,m=s.m;
+  $('clock').textContent=fmt(s.t);
+  const b=Math.max(0,s.budget);$('budgetBar').style.width=b+'%';
+  $('budgetBar').style.background=b>50?'var(--ok)':b>25?'var(--warn)':'var(--crit)';$('budgetVal').textContent=Math.round(b)+'%';
+  const slo=$('slo');
+  if(s.streak>0){slo.textContent=`Восстановление ${s.streak}/4`;slo.className='slo ok';}
+  else if(m.err>0.02||m.p99>700){slo.textContent='SLO нарушен';slo.className='slo crit';}
+  else{slo.textContent='Метрики в норме';slo.className='slo warn';}
+  renderAlerts();renderChanges();renderMap();renderCharts();renderActions();renderLogs();
+}
+
+function computeAlerts(){
+  const s=S,m=s.m,a=[];
+  if(m.err>0.05)a.push(['crit','HighErrorRate',`ошибки ${pct(m.err)} (SLO 1%)`]);else if(m.err>0.02)a.push(['warn','ErrorRateElevated',`ошибки ${pct(m.err)}`]);
+  if(m.p99>1500)a.push(['crit','HighLatencyP99',`p99 ${fmtMs(m.p99)}`]);else if(m.p99>600)a.push(['warn','LatencyP99Elevated',`p99 ${fmtMs(m.p99)}`]);
+  if(m.appUtil>1)a.push(['crit','ThreadPoolSaturated','api: все потоки заняты']);
+  if(m.dbUtil>1)a.push(['crit','PostgresCPUHigh',`нагрузка ${Math.round(m.dbUtil*100)}% ёмкости`]);else if(m.dbUtil>0.85)a.push(['warn','PostgresCPUHigh',`CPU ${Math.round(m.dbUtil*100)}%`]);
+  if(m.connDemand>m.connMax*0.9)a.push(['crit','PGConnectionsSaturated',`${Math.round(m.conn)}/${m.connMax}`]);
+  if(m.cacheHit<0.7)a.push(['warn','RedisHitRateLow',`hit rate ${pct(m.cacheHit)}`]);
+  if(s.t-s.lastOom<=4)a.push(['crit','PodOOMKilled',`рестартов из-за OOM: ${s.oomCount}`]);
+  if(m.mem>85)a.push(['warn','APIMemoryHigh',`heap ${Math.round(m.mem)}%`]);
+  if(m.attempts>1)a.push(['crit','DependencyTimeouts','paybridge: таймауты']);
+  if(s.cronRunning&&s.t-s.cronStartT>=5)a.push(['warn','LongRunningQuery',`запрос дольше ${s.t-s.cronStartT} мин`]);
+  const prev=s.hist[s.hist.length-2];const dr=prev?m.disk-prev.disk:0;
+  if(m.disk>=100)a.push(['crit','PGDiskFull','pg-1: 100%, запись невозможна']);
+  else if(m.disk>95)a.push(['crit','PGDiskAlmostFull',`pg-1: ${Math.round(m.disk)}% (${dr>=0?'+':''}${dr.toFixed(1)}%/мин)`]);
+  else if(m.disk>85)a.push(['warn','PGDiskAlmostFull',`pg-1: ${Math.round(m.disk)}% (${dr>=0?'+':''}${dr.toFixed(1)}%/мин)`]);
+  if(s.walBroken&&m.disk>80)a.push(['warn','WALArchiveFailing','архивация WAL в S3 не проходит']);
+  if(s.certExpired)a.push(['crit','UpstreamErrors','search-svc: 502 на /api/search']);
+  if(m.offered>2200)a.push(['warn','TrafficSpike',`${Math.round(m.offered/1200*100)}% от обычного`]);
+  if(m.lag>40000)a.push(['crit','QueueLagHigh',`order-events: ${Math.round(m.lag/1000)}k сообщений`]);else if(m.lag>5000)a.push(['warn','QueueLagHigh',`order-events: ${Math.round(m.lag/1000)}k сообщений`]);
+  if(s.poison)a.push(['warn','ConsumerErrors','order-worker: ошибки обработки']);
+  if(s.hotKey&&!s.l1)a.push(['warn','RedisShardCPUHigh','redis shard-3: CPU 100%']);
+  if(s.skew)a.push(['crit','Auth401Spike',`401 на ~15% запросов`]);
+  if(s.azDrained)a.push(['info','ZoneDrained','AZ-b без трафика']);
+  if(s.waf)a.push(['info','WAFRuleActive','блокировка подсетей']);
+  if(s.rateLimit)a.push(['info','RateLimitActive',`429 для ${pct(m.shed)} запросов`]);
+  if(s.cb)a.push(['info','CircuitBreakerOpen','paybridge: fail fast']);
+  const now=new Set(a.map(x=>x[1]));
+  a.forEach(x=>{if(s.alertSince[x[1]]===undefined)s.alertSince[x[1]]=s.t;});
+  Object.keys(s.alertSince).forEach(k=>{if(!now.has(k))delete s.alertSince[k];});
+  return a;
+}
+function renderAlerts(){
+  const a=computeAlerts();const order={crit:0,warn:1,info:2};a.sort((x,y)=>order[x[0]]-order[y[0]]);
+  $('alertCount').textContent=a.filter(x=>x[0]==='crit').length?a.filter(x=>x[0]==='crit').length+' critical':'';
+  $('alerts').innerHTML=a.length?a.map(x=>`<li class="${x[0]}"><span class="since">с ${fmt(Math.max(S.alertSince[x[1]],-HIST+1))}</span><b>${x[1]}</b>${esc(x[2])}</li>`).join(''):'<li class="info"><b>Всё тихо</b>Активных алертов нет</li>';
+}
+function renderChanges(){
+  const items=SC.changelog.map(c=>({when:c.when||fmt(c.t),type:c.type,text:c.text,ord:c.t!==undefined?c.t:-9999})).concat(S.youChanges.map(c=>({when:fmt(c.t),type:'you',text:c.text,ord:c.t+0.5})));
+  items.sort((a,b)=>b.ord-a.ord);
+  const names={deploy:'deploy',flag:'flag',infra:'infra',ext:'внешнее',cron:'cron',you:'ты'};
+  $('changes').innerHTML=items.map(c=>`<li><span class="when">${esc(c.when)}</span><span><span class="tag ${c.type}">${names[c.type]}</span>${esc(c.text)}</span></li>`).join('');
+}
+const fmtMs=v=>v>=1000?(v/1000).toFixed(1)+' с':Math.round(v)+' мс';
+
+function renderMap(){
+  const s=S,m=s.m;
+  const hApi=(m.appUtil>1||s.bug>0||s.t-s.lastOom<=1||(s.azDown&&!s.azDrained)||s.skew)?'crit':(m.appUtil>0.8||m.mem>85||m.err>0.02)?'warn':'ok';
+  const hLb=m.err>0.05?'crit':(m.shed>0||m.err>0.02||m.offered>2200)?'warn':'ok';
+  const hRedis=(m.cacheHit<0.6||(s.hotKey&&!s.l1))?'crit':m.cacheHit<0.8?'warn':'ok';
+  const hPg=(m.dbUtil>1||m.connDemand>m.connMax||s.t<s.failoverUntil||m.disk>=95)?'crit':(m.dbUtil>0.8||s.cronRunning||m.disk>85)?'warn':'ok';
+  const hPay=s.cb?'off':m.attempts>1?'crit':'ok';
+  const hCron=s.cronRunning?'warn':'off';
+  const hSearch=s.certExpired?'crit':'ok';
+  const hQ=m.lag>40000?'crit':m.lag>5000?'warn':'ok';
+  const hW=s.poison?'crit':'ok';
+  const node=(x,y,w,label,sub,h)=>`<g class="node ${h}" transform="translate(${x},${y})"><rect width="${w}" height="44" rx="6"/><text x="10" y="18">${label}</text><text class="sub" x="10" y="34">${sub}</text></g>`;
+  const edge=(d,h)=>`<path class="edge ${h}" d="${d}"/>`;
+  const e=h=>h==='off'?'off':h;
+  $('map').innerHTML=`<svg class="map" viewBox="0 0 644 204" role="img" aria-label="Карта сервисов">
+    ${edge('M92 106 H130',hLb)}${edge('M232 106 H280',hApi)}
+    ${edge('M388 106 C420 106 420 36 452 36',hRedis)}${edge('M388 106 H452',hPg)}${edge('M388 106 C420 106 420 176 452 176',hSearch)}
+    ${edge('M334 84 V36 H300',e(hPay))}${edge('M574 106 H560',e(hCron))}
+    ${edge('M334 128 V154',hQ)}${edge('M280 176 H232',hW)}
+    ${node(8,84,84,'Клиенты',Math.round(m.offered)+' rps','ok')}
+    ${node(130,84,102,'Балансировщик',s.rateLimit?'limit 520':s.waf?'WAF: блок':'без лимита',hLb)}
+    ${node(280,84,108,'API ×'+s.replicas,'CPU '+Math.min(999,Math.round(m.appUtil*100))+'%',hApi)}
+    ${node(452,14,108,'Redis',(s.hotKey&&!s.l1)?'shard-3 CPU 100%':'hit '+pct(m.cacheHit),hRedis)}
+    ${node(452,84,108,'Postgres','CPU '+Math.min(100,Math.round(m.dbUtil*100))+'% · диск '+Math.round(m.disk)+'%',hPg)}
+    ${node(452,154,108,'search-svc',s.certExpired?'TLS ошибка':'ok',hSearch)}
+    ${node(186,14,114,'paybridge.io',s.cb?'CB open':fmtMs(m.ext||0),hPay)}
+    ${node(574,84,66,'cron',s.cronRunning?'работает':'ждёт',hCron==='off'?'ok off':hCron)}
+    ${node(280,154,108,'order-events','lag '+(m.lag>=1000?(m.lag/1000).toFixed(1)+'k':Math.round(m.lag)),hQ)}
+    ${node(130,154,102,'order-worker ×'+s.consumers,s.poison?'ошибки':'ok',hW)}
+  </svg>`;
+}
+
+const CHARTS=[
+  {t:'Входящий трафик',g:m=>m.offered,f:v=>Math.round(v)+' rps',max:v=>Math.max(1800,...v)*1.1},
+  {t:'Latency p99',g:m=>m.p99,f:fmtMs,w:600,c:1500,max:v=>Math.max(1000,...v)*1.1},
+  {t:'Ошибки (5xx + 429)',g:m=>m.err*100,f:v=>v.toFixed(v<10?1:0)+'%',w:2,c:5,max:v=>Math.max(10,...v)*1.1},
+  {t:'API: загрузка потоков',g:m=>Math.min(m.appUtil,4)*100,f:v=>Math.round(v)+'%',w:80,c:100,max:v=>Math.max(120,...v)*1.1},
+  {t:'Postgres: нагрузка',g:m=>Math.min(m.dbUtil,4)*100,f:v=>Math.round(v)+'%',w:85,c:100,max:v=>Math.max(120,...v)*1.1},
+  {t:'Redis hit rate',g:m=>m.cacheHit*100,f:v=>Math.round(v)+'%',w:80,c:60,inv:true,max:()=>100},
+  {t:'Память подов api',g:m=>m.mem,f:v=>Math.round(v)+'%',w:80,c:92,max:()=>100},
+  {t:'Соединения Postgres',g:m=>m.conn,f:v=>Math.round(v)+' / 500',w:420,c:490,max:()=>540},
+  {t:'Диск Postgres',g:m=>m.disk,f:v=>Math.round(v)+'%',w:85,c:95,max:()=>100},
+  {t:'Очередь заказов: lag',g:m=>m.lag,f:v=>v>=1000?(v/1000).toFixed(1)+'k':String(Math.round(v)),w:5000,c:40000,max:v=>Math.max(10000,...v)*1.1},
+  {t:'paybridge: ответ',g:m=>m.ext===null?0:m.ext,f:(v,m)=>m.ext===null?'CB open':fmtMs(v),w:1000,c:4000,max:v=>Math.max(1000,...v)*1.1},
+];
+function lvl(c,v){if(c.w===undefined)return'';if(c.inv)return v<c.c?'crit':v<c.w?'warn':'';return v>=c.c?'crit':v>=c.w?'warn':'';}
+function renderCharts(){
+  const H=S.hist.slice(-TREND);const W=220,Hh=52,n=H.length,dx=W/(TREND-1),off=(TREND-n)*dx;
+  $('charts').innerHTML=CHARTS.map(c=>{
+    const vals=H.map(c.g);const mx=c.max(vals);const y=v=>Hh-2-(Math.min(v,mx)/mx)*(Hh-6);
+    const pts=vals.map((v,i)=>`${(off+i*dx).toFixed(1)},${y(v).toFixed(1)}`);
+    const cur=vals[vals.length-1];const L=lvl(c,cur);
+    const thr=c.w!==undefined?`<line class="thr" x1="0" x2="${W}" y1="${y(c.inv?c.w:c.w)}" y2="${y(c.w)}"/>`:'';
+    const iNow=H.findIndex(m=>m.t===0);const now=iNow>=0?`<line class="now" x1="${off+iNow*dx}" x2="${off+iNow*dx}" y1="0" y2="${Hh}"/>`:'';
+    return `<div class="ch ${L}"><div class="top"><span class="ttl">${c.t}</span><span class="val ${L}">${c.f(cur,H[H.length-1])}</span></div>
+      <svg viewBox="0 0 ${W} ${Hh}" preserveAspectRatio="none" aria-hidden="true">${thr}${now}
+      <polygon class="area" points="${off},${Hh} ${pts.join(' ')} ${W},${Hh}"/><polyline class="line" points="${pts.join(' ')}"/></svg></div>`;
+  }).join('');
+}
+function renderActions(){
+  const s=S;
+  $('pending').innerHTML=s.pending.map(p=>`<div class="pending">⏳ ${esc(p.label)} — будет в ${fmt(p.at)}</div>`).join('');
+  const groups=[...new Set(ACTIONS.map(a=>a.group))];
+  $('actions').innerHTML=groups.map(g=>`<div class="agroup"><h3>${g}</h3>${ACTIONS.filter(a=>a.group===g).map(a=>{
+    const on=a.toggle&&a.toggle(s);const busy=s.pending.some(p=>p._id===a.id);
+    return `<button class="act ${on?'on':''}" data-act="${a.id}" ${(a.dis&&a.dis(s))||busy?'disabled':''}><span class="ic">${a.ic}</span><span><span class="nm">${esc(a.name(s))}</span><span class="ds">${esc(a.ds(s))}</span></span></button>`;}).join('')}</div>`).join('');
+  $('flags').innerHTML=Object.keys(FLAG_INFO).map(f=>`<div class="flag"><button class="sw" role="switch" aria-checked="${s.flags[f]}" aria-label="${f}" data-flag="${f}"></button><span><span class="fn">${f}</span><span class="fd">${FLAG_INFO[f]}</span></span></div>`).join('');
+}
+function renderLogs(){
+  const rank={DEBUG:0,INFO:1,LOG:1,WARN:2,ERROR:3,FATAL:3};
+  const L=S.logs.filter(l=>(!logSvc||l.svc===logSvc)&&(!logWarn||rank[l.lvl]>=2)).slice(-90).reverse();
+  $('logs').innerHTML=L.length?L.map(l=>`<div><span class="ts">${fmt(l.t)}:${String(l.sec).padStart(2,'0')}</span> <span class="lv-${l.lvl}">${l.lvl.padEnd(5)}</span> <span class="svc">${l.svc}</span> <span class="lv-${l.lvl==='ERROR'||l.lvl==='FATAL'?l.lvl:''}">${esc(l.msg)}</span></div>`).join(''):'<div class="muted">Нет строк под этот фильтр</div>';
+}
+
+/* ---------- events ---------- */
+$('actions').addEventListener('click',e=>{const b=e.target.closest('[data-act]');if(!b||!S)return;
+  const before=S.pending.length;const msg=doAction(S,SC,b.dataset.act);
+  if(S.pending.length>before)S.pending[S.pending.length-1]._id=b.dataset.act;
+  if(msg){toast(msg);render();}});
+$('flags').addEventListener('click',e=>{const b=e.target.closest('[data-flag]');if(!b||!S)return;const msg=toggleFlag(S,SC,b.dataset.flag);if(msg){toast(msg);render();}});
+$('logSvc').onchange=e=>{logSvc=e.target.value;renderLogs();};
+$('logWarn').onchange=e=>{logWarn=e.target.checked;renderLogs();};
+$('bPause').onclick=()=>{paused=!paused;updCtl();};
+$('bSpeed').onclick=()=>{speedIdx=(speedIdx+1)%SPEEDS.length;run();};
+$('bHint').onclick=()=>{if(!S||S.over)return;S.hints++;paused=true;updCtl();
+  $('ovCard').innerHTML=`<p class="muted">📞 Тимлид, сонным голосом</p><h1 style="font-size:22px">«${esc(SC.hint)}»</h1><p class="muted">−120 очков. Игра на паузе.</p><div class="row"><button class="btn primary" id="bOk">Понял, продолжаю</button></div>`;
+  $('ov').hidden=false;$('bOk').onclick=()=>{$('ov').hidden=true;paused=false;updCtl();};$('bOk').focus();};
+$('bMenu').onclick=()=>{if(confirm('Выйти из смены? Прогресс будет потерян.'))showMenu();};
+document.addEventListener('keydown',e=>{if(e.code==='Space'&&S&&!S.over&&$('ov').hidden&&!['INPUT','SELECT','BUTTON'].includes(document.activeElement.tagName)){e.preventDefault();paused=!paused;updCtl();}});
+
+/* ---------- debrief ---------- */
+function finish(){
+  stop();const s=S;const sc=score(s);if(s.over==='win')saveBest(SC.id,sc);
+  const titles={win:'Инцидент закрыт',budget:'Error budget исчерпан',time:'Смена провалена'};
+  const subs={win:`Причина устранена, система стабильна. Длительность инцидента — ${s.t} мин.`,
+    budget:'Пользователи ушли к конкурентам, утром будет неприятный постмортем.',
+    time:'Прошло 40 минут, проснулся CTO и забрал инцидент себе.'};
+  const vName={good:'помогло',bad:'навредило',neutral:'не повлияло'};const vCls={good:'ok',bad:'crit',neutral:'muted'};
+  $('ovCard').innerHTML=`
+    <p class="muted">${esc(SC.title)} · ${fmt(s.t)}</p>
+    <p class="result ${s.over==='win'?'ok':'crit'}">${titles[s.over]}</p>
+    <p>${subs[s.over]}</p>
+    <div class="stats"><span><b>${sc}</b>очков</span><span><b>${Math.round(s.budget)}%</b>бюджета осталось</span><span><b>${s.taken.length}</b>действий</span><span><b>${s.hints}</b>звонков тимлиду</span></div>
+    ${s.dataLoss?'<p class="crit">Потеряны данные при failover: реплика отставала.</p>':''}
+    <h2>Что случилось на самом деле</h2><p>${esc(SC.cause)}</p>
+    <h2>Оптимальный путь</h2><p>${esc(SC.ideal)}</p>
+    <h2>Твои действия</h2>
+    ${s.taken.length?`<ul class="timeline">${s.taken.map(x=>`<li><span class="mono muted">${fmt(x.t)}</span><span><span class="verdict ${vCls[x.verdict[0]]}">${vName[x.verdict[0]]}</span><b>${esc(x.label)}</b><br><span class="muted">${esc(x.verdict[1])}</span></span></li>`).join('')}</ul>`:'<p class="muted">Ты ничего не сделал. Иногда подождать — правильно, но не в этот раз.</p>'}
+    <h2>Что вынести</h2><ul class="lessons">${SC.lessons.map(l=>`<li>${esc(l)}</li>`).join('')}</ul>
+    <div class="row"><button class="btn primary" id="bRetry">Ещё раз</button><button class="btn" id="bList">Другие смены</button></div>`;
+  $('ov').hidden=false;$('ov').scrollTop=0;
+  $('bRetry').onclick=()=>brief(SC.id,false);$('bList').onclick=showMenu;
+}
+
+try{const th=localStorage.getItem('oncall-theme');if(th)document.documentElement.dataset.theme=th;}catch(e){}
+showMenu();
+</script>
+</body>
+</html>

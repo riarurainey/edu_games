@@ -1,0 +1,1812 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Гонка потоков</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Inter:wght@400;500;600;700&family=Unbounded:wght@600;800&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#0b0d12; --panel:#12151c; --panel2:#181c25; --line:#232836; --line2:#2f3546;
+  --text:#e6e8ee; --muted:#858c9c; --dim:#5a6070;
+  --c0:#4fd8f5; --c1:#ff6fd0; --c2:#ffbf47; --c3:#9ff26b;
+  --ok:#3ee08a; --bad:#ff5d6c; --warn:#ffb347;
+  --mono:'JetBrains Mono',ui-monospace,Consolas,monospace;
+  --sans:'Inter',system-ui,-apple-system,'Segoe UI',sans-serif;
+  --disp:'Unbounded','Inter',sans-serif;
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--bg);color:var(--text);font:15px/1.6 var(--sans);
+  background-image:linear-gradient(rgba(79,216,245,.035) 1px,transparent 1px),linear-gradient(90deg,rgba(79,216,245,.035) 1px,transparent 1px);
+  background-size:28px 28px}
+code,kbd{font-family:var(--mono);font-size:.87em}
+code{background:rgba(255,255,255,.06);border:1px solid var(--line);padding:1px 5px;border-radius:4px;color:#ffd98a}
+kbd{border:1px solid var(--line2);border-bottom-width:2px;padding:0 5px;border-radius:4px}
+b{color:#fff}
+header{position:sticky;top:0;z-index:20;height:58px;display:flex;align-items:center;gap:14px;padding:0 18px;background:rgba(11,13,18,.93);backdrop-filter:blur(8px);border-bottom:1px solid var(--line)}
+.logo{font:800 17px var(--disp);letter-spacing:.3px;white-space:nowrap;display:flex;align-items:center;gap:9px}
+.logo .bars{display:inline-flex;flex-direction:column;gap:3px}
+.logo .bars i{display:block;height:3px;border-radius:2px}
+.logo .bars i:nth-child(1){width:18px;background:var(--c0)}.logo .bars i:nth-child(2){width:12px;background:var(--c1);margin-left:5px}.logo .bars i:nth-child(3){width:15px;background:var(--c2);margin-left:2px}
+.prog{flex:1;max-width:340px;display:flex;align-items:center;gap:10px;margin-left:auto}
+.prog-track{flex:1;height:6px;background:var(--panel2);border-radius:9px;overflow:hidden}
+#prog-bar{height:100%;width:0;background:linear-gradient(90deg,var(--c0),var(--c1),var(--c2));transition:width .5s}
+#prog-text{font:600 12px var(--mono);color:var(--muted);white-space:nowrap}
+.hbtn{background:none;border:1px solid var(--line2);color:var(--text);border-radius:8px;padding:6px 11px;font:500 13px var(--sans);cursor:pointer}
+.hbtn:hover{border-color:var(--c0);color:var(--c0)}
+#burger{display:none;font-size:18px;padding:3px 10px}
+.wrap{display:flex;min-height:calc(100vh - 58px)}
+aside{width:290px;flex:none;border-right:1px solid var(--line);background:var(--panel);position:sticky;top:58px;height:calc(100vh - 58px);overflow-y:auto;padding:8px 10px 30px}
+.chap-t{display:flex;justify-content:space-between;gap:8px;font:600 11px var(--sans);text-transform:uppercase;letter-spacing:.7px;color:var(--muted);padding:14px 8px 6px}
+.chap-c{font-family:var(--mono)}
+.lv{display:flex;align-items:center;gap:9px;width:100%;text-align:left;background:none;border:0;color:var(--text);padding:6px 8px;border-radius:7px;cursor:pointer;font:14px var(--sans)}
+.lv:hover{background:var(--panel2)}
+.lv.active{background:rgba(79,216,245,.1);box-shadow:inset 2px 0 var(--c0)}
+.lv-n{font:12px var(--mono);color:var(--dim);width:20px;text-align:right;flex:none}
+.lv-t{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.lv-s{font:600 12px var(--mono);color:var(--dim);width:16px;text-align:center}
+.lv.done .lv-s{color:var(--ok)} .lv.done .lv-t{color:#b5bac6}
+.side-foot{padding:16px 8px 0;border-top:1px solid var(--line);margin-top:10px}
+main{flex:1;min-width:0;padding:26px 30px 80px}
+#content{max-width:1100px;margin:0 auto}
+.crumb{font:500 12px var(--sans);color:var(--muted);text-transform:uppercase;letter-spacing:.6px;display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+.badge{font-size:10px;padding:2px 8px;border-radius:20px;border:1px solid}
+.b-quiz{color:var(--c0);border-color:rgba(79,216,245,.4)} .b-sim{color:var(--c1);border-color:rgba(255,111,208,.4)} .b-star{color:var(--c2);border-color:rgba(255,191,71,.5)}
+h1{font:800 26px/1.3 var(--disp);margin:8px 0 18px;letter-spacing:-.2px}
+h1 .num{color:var(--c0)} .okmark{color:var(--ok);font-size:.75em}
+.story{background:linear-gradient(135deg,rgba(255,111,208,.07),rgba(79,216,245,.05));border:1px solid var(--line2);border-left:3px solid var(--c1);border-radius:10px;padding:14px 18px;font-size:15.5px;margin-bottom:14px}
+.theory{background:var(--panel);border:1px solid var(--line);border-radius:10px;margin-bottom:14px}
+.theory summary{cursor:pointer;padding:11px 18px;font-weight:600;list-style:none;user-select:none}
+.theory summary::-webkit-details-marker{display:none}
+.theory summary::after{content:'▾';float:right;color:var(--muted);transition:transform .2s}
+.theory:not([open]) summary::after{transform:rotate(-90deg)}
+.theory-b{padding:2px 20px 14px;border-top:1px solid var(--line)}
+.theory-b p,.theory-b ul,.theory-b ol{margin:11px 0}
+.theory-b li{margin:4px 0}
+.theory-b pre{background:#07090d;border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto}
+.theory-b pre code{background:none;border:0;padding:0;color:#d7dce8;font-size:13px;line-height:1.55}
+.pc-demo{color:var(--c0)}
+table.cmp{border-collapse:collapse;margin:12px 0;font-size:14px;width:100%}
+table.cmp th,table.cmp td{border:1px solid var(--line);padding:6px 10px;text-align:left;vertical-align:top}
+table.cmp th{background:var(--panel2);color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.5px}
+.goal{border:1px solid rgba(62,224,138,.4);background:rgba(62,224,138,.06);border-radius:10px;padding:12px 18px;margin-bottom:12px}
+.goal-l{font:600 11px var(--sans);text-transform:uppercase;letter-spacing:.8px;color:var(--ok);margin-bottom:3px}
+.toolbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:10px}
+.sp{flex:1}
+.btn{border:1px solid var(--line2);background:var(--panel2);color:var(--text);padding:7px 13px;border-radius:8px;font:500 13px var(--sans);cursor:pointer;transition:.15s}
+.btn:hover:not(:disabled){border-color:var(--muted)}
+.btn:disabled{opacity:.35;cursor:default}
+.btn.primary{background:var(--ok);border-color:var(--ok);color:#04230f;font-weight:700}
+.btn.ghost{background:none}
+.btn.small{padding:5px 11px;font-size:12px;margin-top:10px}
+.btn.shield{border-color:rgba(79,216,245,.45);color:var(--c0)}
+.btn.shield:hover{background:rgba(79,216,245,.1)}
+.hintbox{background:rgba(255,191,71,.08);border:1px solid rgba(255,191,71,.35);color:#ffd88d;border-radius:10px;padding:10px 16px;margin-bottom:10px}
+.ban{border-radius:10px;padding:10px 16px;margin-bottom:10px;font-size:14px}
+.ban.warn{background:rgba(255,179,71,.08);border:1px solid rgba(255,179,71,.4);color:#ffd9a3}
+.ban.bad{background:rgba(255,93,108,.08);border:1px solid rgba(255,93,108,.4)}
+.threads{display:grid;gap:12px;grid-template-columns:repeat(2,minmax(0,1fr))}
+.threads.n3{grid-template-columns:repeat(3,minmax(0,1fr))}
+.threads.n4{grid-template-columns:repeat(2,minmax(0,1fr))}
+.th{--tc:var(--c0);background:#0a0c11;border:1px solid var(--line2);border-top:3px solid var(--tc);border-radius:10px;display:flex;flex-direction:column;min-width:0;transition:.15s;cursor:not-allowed}
+.th.c1{--tc:var(--c1)}.th.c2{--tc:var(--c2)}.th.c3{--tc:var(--c3)}
+.th.can{cursor:pointer}
+.th.can:hover{box-shadow:0 0 0 1px var(--tc),0 8px 30px rgba(0,0,0,.4)}
+.th.fin{opacity:.72}
+.th-h{display:flex;align-items:center;gap:8px;padding:9px 12px 6px}
+.th-k{font:700 11px var(--mono);width:20px;height:20px;border-radius:5px;display:grid;place-items:center;background:var(--tc);color:#000;flex:none}
+.th-n{font-weight:700;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.st{font:700 10px var(--mono);padding:2px 7px;border-radius:5px;letter-spacing:.3px;cursor:help}
+.st-RUNNABLE{background:rgba(62,224,138,.15);color:var(--ok)}
+.st-BLOCKED{background:rgba(255,93,108,.16);color:var(--bad)}
+.st-WAITING{background:rgba(255,179,71,.16);color:var(--warn)}
+.st-NEW{background:rgba(255,255,255,.08);color:var(--muted)}
+.st-TERMINATED{background:rgba(255,255,255,.06);color:var(--muted)}
+.st-bad{color:var(--bad)}
+.th-note{font:12px var(--mono);color:var(--muted);padding:0 12px 4px}
+.code{font:12.5px/1.6 var(--mono);padding:4px 0 6px;overflow-x:auto;flex:1}
+.ln{display:flex;white-space:pre;padding-right:10px;min-width:max-content}
+.gut{width:22px;flex:none;text-align:center;color:var(--tc);font-size:11px}
+.ln.lbl .tx{opacity:.55}
+.ln.pc{background:linear-gradient(90deg,color-mix(in srgb,var(--tc) 22%,transparent),transparent)}
+.ln.pc .tx{opacity:1}
+.th:not(.can) .ln.pc{background:linear-gradient(90deg,rgba(255,93,108,.18),transparent)}
+.th:not(.can) .ln.pc .gut{color:var(--bad)}
+.ln.last .tx{text-decoration:underline;text-decoration-color:color-mix(in srgb,var(--tc) 60%,transparent);text-underline-offset:3px}
+.ln.flash{animation:flash .6s}
+@keyframes flash{0%{background:color-mix(in srgb,var(--tc) 45%,transparent)}100%{background:transparent}}
+.endln .tx{font-style:italic}
+.exc{color:var(--bad);white-space:normal}
+.j-k{color:#c792ea}.j-s{color:#a8e6a1}.j-n{color:#f5a97f}.j-c{color:#5f6b80;font-style:italic}.j-m{color:#82b1ff}
+.locals{display:flex;flex-wrap:wrap;gap:5px;padding:6px 12px;border-top:1px dashed var(--line)}
+.loc{font:11.5px var(--mono);background:var(--panel2);border:1px solid var(--line);border-radius:5px;padding:1px 7px;color:var(--muted)}
+.loc b{color:var(--text);font-weight:600}
+.th-f{display:flex;align-items:center;gap:8px;padding:8px 10px;border-top:1px solid var(--line)}
+.why{flex:1;font-size:12px;color:var(--muted);line-height:1.35}
+.btn.step{padding:5px 12px;border-color:var(--tc);color:var(--tc);background:none;font-weight:600}
+.btn.step:not(:disabled):hover{background:color-mix(in srgb,var(--tc) 15%,transparent)}
+.v-s{color:#a8e6a1}.v-n{color:#f5a97f}.v-k{color:#c792ea}.v-null{color:var(--dim)}
+.panels{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px 14px;min-width:0}
+.panel-t{font:600 11px var(--sans);text-transform:uppercase;letter-spacing:.7px;color:var(--muted);margin-bottom:6px}
+.muted{color:var(--dim);font-weight:400;text-transform:none;letter-spacing:0}
+.var{display:flex;justify-content:space-between;gap:10px;font:13px var(--mono);padding:3px 6px;border-radius:5px}
+.var.chg{animation:chg 1s}
+@keyframes chg{0%{background:rgba(255,191,71,.35)}100%{background:transparent}}
+.vk{color:#d7dce8}.vv{text-align:right;word-break:break-word}
+.own{font:600 11.5px var(--mono);padding:0 6px;border-radius:4px;background:color-mix(in srgb,var(--oc) 18%,transparent);color:var(--oc);white-space:nowrap}
+.own.c0{--oc:var(--c0)}.own.c1{--oc:var(--c1)}.own.c2{--oc:var(--c2)}.own.c3{--oc:var(--c3)}
+.out,.log{font:12.5px/1.6 var(--mono);max-height:190px;overflow-y:auto}
+.out .oerr{color:var(--bad)}
+.dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:8px;vertical-align:middle;background:var(--oc)}
+.dot.c0{--oc:var(--c0)}.dot.c1{--oc:var(--c1)}.dot.c2{--oc:var(--c2)}.dot.c3{--oc:var(--c3)}
+.log>div{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ln-i{color:var(--dim);display:inline-block;width:26px}
+.note{color:var(--warn)}
+#feedback{margin-top:14px}
+.fb{border-radius:10px;padding:13px 18px}
+.fb.bad{background:rgba(255,93,108,.08);border:1px solid rgba(255,93,108,.38);color:#ffd0d4}
+.fb.info{background:rgba(79,216,245,.07);border:1px solid rgba(79,216,245,.35)}
+.fb.good{background:rgba(62,224,138,.07);border:1px solid rgba(62,224,138,.4)}
+.fb-t{font:700 16px var(--sans);color:var(--ok);margin-bottom:4px}
+.fb.info .fb-t{color:var(--c0)}
+.why-b{margin-bottom:8px;color:#cfe9ff}
+.fb .btn{margin-top:12px}
+.pop{animation:pop .4s ease}
+@keyframes pop{0%{transform:scale(.97);opacity:0}100%{transform:none;opacity:1}}
+.shake{animation:shake .35s}
+@keyframes shake{25%{transform:translateX(-6px)}50%{transform:translateX(5px)}75%{transform:translateX(-3px)}}
+.quiz{display:flex;flex-direction:column;gap:12px}
+.qcard{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:15px 18px}
+.qcard.solved{border-color:rgba(62,224,138,.35)}
+.qq{font-weight:600;font-size:15.5px;display:flex;gap:10px;margin-bottom:12px}
+.qn{flex:none;width:24px;height:24px;border-radius:6px;background:var(--panel2);border:1px solid var(--line2);display:grid;place-items:center;font:600 12px var(--mono);color:var(--c0)}
+.multi{font:500 11px var(--sans);color:var(--c2);border:1px solid rgba(255,191,71,.4);border-radius:20px;padding:1px 7px;margin-left:4px;white-space:nowrap}
+.qopts{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.qopt{text-align:left;background:var(--panel2);border:1px solid var(--line);color:var(--text);padding:10px 13px;border-radius:9px;font:14px var(--sans);cursor:pointer;transition:.15s}
+.qopt:hover:not(:disabled){border-color:var(--c0)}
+.qopt.sel{border-color:var(--c2);background:rgba(255,191,71,.1)}
+.qopt:disabled{cursor:default}
+.qopt.right{border-color:var(--ok);background:rgba(62,224,138,.12);color:#fff}
+.qopt.wrong{border-color:var(--bad);opacity:.55;text-decoration:line-through}
+.qexp{margin-top:10px;font-size:14px;color:#c4c9d4}
+.good{color:var(--ok);font-weight:600}.bad{color:var(--bad);font-weight:600}
+.nav{display:flex;justify-content:space-between;margin-top:26px;padding-top:16px;border-top:1px solid var(--line)}
+#modal{position:fixed;inset:0;z-index:50;background:rgba(0,0,0,.7);display:grid;place-items:center;padding:16px}
+#modal[hidden]{display:none}
+.modal-b{max-width:520px;background:var(--panel);border:1px solid var(--c0);border-radius:16px;padding:26px 28px;text-align:center}
+.modal-b h2{font:800 22px var(--disp);margin:6px 0}
+.big{font-size:50px}
+body.replaying .th{cursor:progress}
+#scrim{display:none}
+@media (max-width:1000px){ .threads.n3{grid-template-columns:1fr 1fr} }
+@media (max-width:900px){
+  #burger{display:inline-block}
+  aside{position:fixed;left:0;top:58px;z-index:30;transform:translateX(-105%);transition:transform .25s;box-shadow:10px 0 40px rgba(0,0,0,.5)}
+  body.nav-open aside{transform:none}
+  body.nav-open #scrim{display:block;position:fixed;inset:58px 0 0 0;background:rgba(0,0,0,.5);z-index:25}
+  main{padding:18px 16px 60px}
+  h1{font-size:21px}
+  .qopts{grid-template-columns:1fr}
+  .logo-t{display:none}
+}
+@media (max-width:640px){
+  .threads,.threads.n3,.threads.n4,.panels{grid-template-columns:1fr}
+  .toolbar .sp{display:none}
+}
+</style>
+</head>
+<body>
+<header>
+  <button class="hbtn" id="burger" aria-label="Уровни">☰</button>
+  <div class="logo"><span class="bars"><i></i><i></i><i></i></span><span class="logo-t">Гонка потоков</span></div>
+  <div class="prog"><div class="prog-track"><div id="prog-bar"></div></div><span id="prog-text">0 / 0</span></div>
+</header>
+<div class="wrap">
+  <aside>
+    <div id="levels"></div>
+    <div class="side-foot"><button class="hbtn" id="reset-progress">Сбросить прогресс</button></div>
+  </aside>
+  <div id="scrim"></div>
+  <main><div id="content"></div></main>
+</div>
+<div id="modal" hidden></div>
+<script>
+/* ===== Симулятор потоков: вы — планировщик ===== */
+var SIM = (function () {
+'use strict';
+function clone(o) { return JSON.parse(JSON.stringify(o)); }
+function jx(cls, msg) { var e = new Error(msg || cls); e.jx = cls; e.jmsg = msg || ''; return e; }
+
+/* ---- конструкторы инструкций ---- */
+var B = {
+  L: function (text, id) { return { t: 'label', text: text, id: id }; },
+  S: function (text, fn) { return { t: 'exec', text: text, fn: fn }; },
+  IF: function (text, cond, to, id) { return { t: 'if', text: text, cond: cond, to: to, id: id }; },
+  GOTO: function (text, to, fn) { return { t: 'goto', text: text, to: to, fn: fn }; },
+  SYNC: function (text, m) { return { t: 'lock', text: text, m: m, kind: 'sync' }; },
+  END: function (text, m) { return { t: 'unlock', text: text, m: m }; },
+  LOCK: function (text, m) { return { t: 'lock', text: text, m: m, kind: 'rl' }; },
+  UNLOCK: function (text, m) { return { t: 'unlock', text: text, m: m }; },
+  WAIT: function (text, m) { return { t: 'wait', text: text, m: m }; },
+  NOTIFY: function (text, m) { return { t: 'notify', text: text, m: m }; },
+  NOTIFYALL: function (text, m) { return { t: 'notifyAll', text: text, m: m }; },
+  BLOCK: function (text, cond, fn, label) { return { t: 'block', text: text, cond: cond, fn: fn, label: label }; },
+  PRINT: function (text, fn) { return { t: 'print', text: text, fn: fn }; },
+  START: function (text, ti) { return { t: 'start', text: text, ti: ti }; },
+  RET: function (text) { return { t: 'ret', text: text }; },
+  ID: function (id, op) { op.id = id; return op; },
+  jx: jx
+};
+
+function prep(level) {
+  if (level._prepped) return;
+  level.threads.forEach(function (th) {
+    th._map = {};
+    th.code.forEach(function (op, i) { if (op.id) th._map[op.id] = i; });
+  });
+  level._prepped = true;
+}
+function target(th, to) {
+  if (to === '$end') return th.code.length;
+  if (!(to in th._map)) throw new Error('Нет метки ' + to);
+  return th._map[to];
+}
+function monName(op, t) { return typeof op.m === 'function' ? op.m(t.l) : op.m; }
+
+function init(level) {
+  prep(level);
+  var s = {
+    g: clone(level.vars || {}), mon: {}, out: [], steps: 0, seq: 0, exc: null, last: null,
+    threads: level.threads.map(function (th) {
+      return { pc: 0, l: clone(th.locals || {}), wait: null, done: false, exc: null, started: !th.notStarted };
+    })
+  };
+  for (var i = 0; i < s.threads.length; i++) normalize(level, s, i);
+  return s;
+}
+
+function normalize(level, s, ti) {
+  var th = level.threads[ti], t = s.threads[ti], guard = 0;
+  while (t.pc < th.code.length && guard++ < 1000) {
+    var op = th.code[t.pc];
+    if (op.t === 'label') { t.pc++; continue; }
+    if (op.t === 'goto') { if (op.fn) op.fn(s.g, t.l); t.pc = target(th, op.to); continue; }
+    break;
+  }
+  if (t.pc >= th.code.length && !t.done) finish(s, ti);
+}
+function finish(s, ti) {
+  var t = s.threads[ti];
+  t.done = true;
+  // монитор synchronized освобождается при выходе из блока (в т.ч. по исключению/return); ReentrantLock — нет
+  for (var m in s.mon) if (s.mon[m].owner === ti && s.mon[m].kind === 'sync') delete s.mon[m];
+}
+function free(s, m, ti) { return !s.mon[m] || s.mon[m].owner === ti; }
+function acquire(s, m, ti, kind, count) {
+  if (s.mon[m] && s.mon[m].owner === ti) s.mon[m].count += (count || 1);
+  else s.mon[m] = { owner: ti, count: count || 1, kind: kind || 'sync' };
+}
+
+function view(level, s) {
+  var v = {
+    g: s.g, out: s.out, exc: s.exc, steps: s.steps,
+    done: function (i) { return s.threads[i].done; },
+    l: function (i) { return s.threads[i].l; },
+    at: function (i, id) { var t = s.threads[i]; return !t.done && level.threads[i].code[t.pc] && level.threads[i].code[t.pc].id === id; }
+  };
+  v.allDone = s.threads.every(function (t) { return t.done; });
+  var any = false;
+  for (var i = 0; i < s.threads.length; i++) if (canStep(level, s, i)) { any = true; break; }
+  v.deadlock = !v.allDone && !any;
+  return v;
+}
+
+function canStep(level, s, ti) {
+  var t = s.threads[ti];
+  if (t.done || !t.started) return false;
+  if (t.wait) return t.wait.phase === 'reacq' && free(s, t.wait.m, ti);
+  var op = level.threads[ti].code[t.pc];
+  if (!op) return false;
+  if (op.t === 'lock') return free(s, monName(op, t), ti);
+  if (op.t === 'block') return !!op.cond(s.g, t.l, view0(level, s));
+  return true;
+}
+// облегчённый view без deadlock (чтобы не было рекурсии)
+function view0(level, s) {
+  return { g: s.g, out: s.out, done: function (i) { return s.threads[i].done; }, l: function (i) { return s.threads[i].l; } };
+}
+
+function status(level, s, ti) {
+  var t = s.threads[ti];
+  if (!t.started) return { code: 'NEW', why: 'поток создан, но start() ещё не вызван' };
+  if (t.done) return t.exc ? { code: 'TERMINATED', why: 'завершён с исключением', bad: true } : { code: 'TERMINATED', why: 'завершён' };
+  if (t.wait) {
+    if (t.wait.phase === 'wait') return { code: 'WAITING', why: 'в wait() на «' + t.wait.m + '», ждёт notify' };
+    if (!free(s, t.wait.m, ti)) return { code: 'BLOCKED', why: 'разбужен, ждёт освобождения монитора «' + t.wait.m + '»' };
+    return { code: 'RUNNABLE', why: 'разбужен — следующий шаг снова захватит монитор «' + t.wait.m + '»' };
+  }
+  var op = level.threads[ti].code[t.pc];
+  if (op.t === 'lock') {
+    var m = monName(op, t);
+    if (!free(s, m, ti)) {
+      var who = level.threads[s.mon[m].owner].name;
+      if (op.kind === 'rl') return { code: 'WAITING', why: 'ждёт lock() — «' + m + '» держит ' + who };
+      return { code: 'BLOCKED', why: 'ждёт монитор «' + m + '» — его держит ' + who };
+    }
+  }
+  if (op.t === 'block' && !op.cond(s.g, t.l, view0(level, s))) return { code: op.label || 'WAITING', why: 'заблокирован на этой строке' };
+  return { code: 'RUNNABLE', why: 'готов выполнить шаг' };
+}
+
+function step(level, s0, ti) {
+  if (!canStep(level, s0, ti)) return null;
+  var s = clone(s0), th = level.threads[ti], t = s.threads[ti];
+  var pcBefore = t.pc, note = '';
+  try {
+    if (t.wait) {
+      acquire(s, t.wait.m, ti, 'sync', t.wait.count);
+      note = 'снова захватил монитор «' + t.wait.m + '» после wait()';
+      t.wait = null;
+      pcBefore = t.pc - 1;
+    } else {
+      var op = th.code[t.pc], m;
+      switch (op.t) {
+        case 'exec': op.fn && op.fn(s.g, t.l); t.pc++; break;
+        case 'if': t.pc = op.cond(s.g, t.l) ? t.pc + 1 : target(th, op.to); break;
+        case 'lock': m = monName(op, t); acquire(s, m, ti, op.kind); t.pc++; break;
+        case 'unlock':
+          m = monName(op, t);
+          if (!s.mon[m] || s.mon[m].owner !== ti) throw jx('java.lang.IllegalMonitorStateException', 'поток не владеет «' + m + '»');
+          if (--s.mon[m].count <= 0) delete s.mon[m];
+          t.pc++; break;
+        case 'wait':
+          m = monName(op, t);
+          if (!s.mon[m] || s.mon[m].owner !== ti) throw jx('java.lang.IllegalMonitorStateException', 'wait() без владения монитором «' + m + '»');
+          t.wait = { m: m, count: s.mon[m].count, phase: 'wait', seq: ++s.seq };
+          delete s.mon[m];
+          t.pc++; break;
+        case 'notify': case 'notifyAll':
+          m = monName(op, t);
+          if (!s.mon[m] || s.mon[m].owner !== ti) throw jx('java.lang.IllegalMonitorStateException', op.t + '() без владения монитором «' + m + '»');
+          var ws = s.threads.map(function (x, i) { return { x: x, i: i }; })
+            .filter(function (o) { return o.x.wait && o.x.wait.m === m && o.x.wait.phase === 'wait'; })
+            .sort(function (a, b) { return a.x.wait.seq - b.x.wait.seq; });
+          if (op.t === 'notify') ws = ws.slice(0, 1);
+          ws.forEach(function (o) { o.x.wait.phase = 'reacq'; });
+          note = ws.length ? 'разбужен: ' + ws.map(function (o) { return level.threads[o.i].name; }).join(', ') : 'никто не ждал — сигнал потерян';
+          t.pc++; break;
+        case 'block': op.fn && op.fn(s.g, t.l); t.pc++; break;
+        case 'print': s.out.push({ ti: ti, text: String(op.fn(s.g, t.l)) }); t.pc++; break;
+        case 'start': s.threads[op.ti].started = true; t.pc++; break;
+        case 'ret': t.pc = th.code.length; break;
+      }
+    }
+  } catch (e) {
+    if (!e.jx) throw e;
+    t.exc = e.jx + (e.jmsg ? ': ' + e.jmsg : '');
+    s.exc = (s.exc ? s.exc + '\n' : '') + t.exc;
+    s.out.push({ ti: ti, text: 'Exception in thread "' + th.name + '" ' + t.exc, err: true });
+    note = 'исключение ' + e.jx.split('.').pop();
+    finish(s, ti);
+  }
+  s.steps++;
+  s.last = { ti: ti, pc: pcBefore, note: note };
+  normalize(level, s, ti);
+  return s;
+}
+
+function key(s) { return JSON.stringify([s.g, s.mon, s.out, s.threads, s.exc]); }
+
+/* Поиск в ширину: кратчайший порядок шагов к цели (или null, если цель недостижима) */
+function solve(level, from, limit) {
+  prep(level);
+  limit = limit || 300000;
+  var start = from || init(level);
+  if (level.goal(view(level, start))) return { path: [], explored: 1 };
+  var q = [{ s: start, path: [] }], seen = {}, head = 0, n = 0;
+  seen[key(start)] = 1;
+  while (head < q.length) {
+    var cur = q[head++];
+    for (var i = 0; i < cur.s.threads.length; i++) {
+      var ns = step(level, cur.s, i);
+      if (!ns) continue;
+      var k = key(ns);
+      if (seen[k]) continue;
+      seen[k] = 1; n++;
+      var p = cur.path.concat([i]);
+      if (level.goal(view(level, ns))) return { path: p, explored: n };
+      if (n > limit) return { path: null, explored: n, truncated: true };
+      q.push({ s: ns, path: p });
+    }
+    cur.s = null;
+  }
+  return { path: null, explored: n };
+}
+
+return { B: B, init: init, step: step, canStep: canStep, status: status, view: view, solve: solve, clone: clone, prep: prep };
+})();
+if (typeof module !== 'undefined') module.exports = SIM;
+
+/* ===== Уровни «Гонки потоков» ===== */
+var LEVELS = (function (B) {
+var L = B.L, S = B.S, IF = B.IF, GOTO = B.GOTO, SYNC = B.SYNC, END = B.END, LOCK = B.LOCK, UNLOCK = B.UNLOCK,
+    WAIT = B.WAIT, NOTIFY = B.NOTIFY, NOTIFYALL = B.NOTIFYALL, BLOCK = B.BLOCK, PRINT = B.PRINT, START = B.START, ID = B.ID, jx = B.jx;
+
+/* часто встречающиеся куски */
+function inc3(v) {
+  v = v || 'count';
+  return [
+    S('int tmp = ' + v + ';      // прочитать', function (g, l) { l.tmp = g[v]; }),
+    S('tmp = tmp + 1;        // увеличить', function (g, l) { l.tmp = l.tmp + 1; }),
+    S(v + ' = tmp;          // записать', function (g, l) { g[v] = l.tmp; })
+  ];
+}
+function twin(names, mk) { return names.map(function (n, i) { var t = mk(i); t.name = n; return t; }); }
+
+return [
+/* ================= ГЛАВА 1. ОСНОВЫ ================= */
+{
+  id: 'q-threads', ch: 1, type: 'quiz', title: 'Процессы и потоки',
+  story: 'Банк «Параллель» нанял вас на необычную должность — <b>хаос-инженер многопоточности</b>. Ваша задача — находить баги в конкурентном коде раньше, чем их найдёт продакшен. Но сначала — проверка базы.',
+  theory: `
+<p><b>Процесс</b> — запущенная программа со своим адресным пространством. Запущенная JVM — это один процесс.</p>
+<p><b>Поток</b> (thread) — независимая последовательность выполнения внутри процесса. Потоки одного процесса <b>разделяют кучу</b> (heap): все объекты видны всем потокам. Но у каждого потока свой <b>стек</b>: локальные переменные и параметры методов принадлежат только ему.</p>
+<p>Отсюда главная проблема: два потока могут одновременно читать и менять один и тот же объект.</p>
+<p>Создать поток в Java:</p>
+<pre><code>Runnable task = () -> System.out.println("Привет из " + Thread.currentThread().getName());
+Thread t = new Thread(task, "worker");
+t.start();   // запустить в НОВОМ потоке
+t.join();    // дождаться его завершения</code></pre>
+<p><code>start()</code> создаёт новый поток ОС, и он вызывает <code>run()</code>. Если вызвать <code>run()</code> напрямую, код выполнится в <b>текущем</b> потоке, как обычный метод, — никакой параллельности.</p>
+<p>Порядок выполнения потоков определяет <b>планировщик</b> операционной системы. Программист его не контролирует: поток могут прервать между любыми двумя инструкциями. В этой игре планировщик — <b>вы</b>.</p>`,
+  questions: [
+    { q: 'Что потоки одного процесса разделяют между собой?', options: ['Стек вызовов', 'Кучу (heap) — все объекты', 'Локальные переменные', 'Ничего'], correct: 1, explain: 'Куча общая, стек у каждого потока свой. Локальные переменные лежат в стеке — поэтому они потокобезопасны сами по себе.' },
+    { q: 'Что произойдёт при вызове t.run() вместо t.start()?', options: ['Поток запустится как обычно', 'Будет исключение IllegalThreadStateException', 'run() выполнится в текущем потоке, новый поток не создастся', 'Поток запустится дважды'], correct: 2, explain: 'run() — обычный метод. Новый поток создаёт только start().' },
+    { q: 'Можно ли вызвать start() у одного объекта Thread дважды?', options: ['Да, поток перезапустится', 'Нет, второй вызов бросит IllegalThreadStateException'], correct: 1, explain: 'Поток одноразовый. Для повторного запуска задачи создают новый Thread или используют пул потоков.' },
+    { q: 'Кто решает, в каком порядке выполняются инструкции разных потоков?', options: ['Порядок вызова start()', 'Планировщик ОС — порядок не гарантирован', 'Приоритет потока, всегда строго', 'Компилятор javac'], correct: 1, explain: 'Порядок недетерминирован. Приоритеты — лишь подсказка планировщику, полагаться на них нельзя.' }
+  ]
+},
+{
+  id: 'intro', ch: 1, type: 'sim', title: 'Вы — планировщик',
+  story: 'Первое задание — тренировочное. Главный поток <code>main</code> запускает два потока, и каждый печатает свою букву. Руководитель уверен, что вывод всегда будет «A, B, main». Покажите, что это не так.',
+  theory: `
+<p>Как играть:</p>
+<ul>
+<li>Каждая колонка — поток. Стрелка <span class="pc-demo">▶</span> показывает строку, которую поток выполнит следующей.</li>
+<li>Нажмите на колонку потока (или кнопку <b>Шаг</b>, или клавишу с его номером <kbd>1</kbd>, <kbd>2</kbd>…), чтобы он выполнил <b>одну</b> строку.</li>
+<li>Поток в состоянии <b>NEW</b> ещё не запущен: шагать им нельзя, пока кто-то не вызовет <code>start()</code>.</li>
+<li><b>Отменить</b> откатывает последний шаг, <b>Сначала</b> — начинает заново.</li>
+</ul>
+<p>Ваша цель всегда указана в рамке «Цель». В реальности порядок выбирает ОС, а здесь — вы. Если какой-то порядок <b>возможен</b>, значит, рано или поздно он случится в продакшене.</p>`,
+  task: 'Добейтесь, чтобы программа напечатала <code>B</code>, потом <code>main</code>, потом <code>A</code>.',
+  threads: [
+    { name: 'main', code: [ START('t1.start();', 1), START('t2.start();', 2), PRINT('System.out.println("main");', function () { return 'main'; }) ] },
+    { name: 't1', notStarted: true, code: [ PRINT('System.out.println("A");', function () { return 'A'; }) ] },
+    { name: 't2', notStarted: true, code: [ PRINT('System.out.println("B");', function () { return 'B'; }) ] }
+  ],
+  goal: function (v) { return v.out.map(function (o) { return o.text; }).join(',') === 'B,main,A'; },
+  hint: 'Сначала main запускает оба потока. Потом дайте шаг t2, потом main, потом t1.',
+  success: 'Запуск потока не значит, что он выполнится сразу. Вызов start() лишь делает поток готовым к работе (RUNNABLE), а когда он получит процессор — решает планировщик.'
+},
+{
+  id: 'join-miss', ch: 1, type: 'sim', title: 'Ответ раньше вопроса',
+  story: 'Отчёт о балансе считается в фоновом потоке, а main сразу выводит результат. В тестах всегда печаталось 42. В продакшене клиент увидел баланс 0.',
+  theory: `
+<p>Без синхронизации main не ждёт другой поток. Чтобы дождаться завершения потока, используют <code>join()</code>:</p>
+<pre><code>Thread worker = new Thread(() -> result = compute());
+worker.start();
+worker.join();        // main ждёт, пока worker завершится
+System.out.println(result);</code></pre>
+<p>Пока main ждёт в <code>join()</code>, он находится в состоянии <b>WAITING</b>.</p>`,
+  task: 'Добейтесь, чтобы main напечатал <code>0</code>.',
+  vars: { result: 0 },
+  threads: [
+    { name: 'main', code: [ START('worker.start();', 1), PRINT('System.out.println(result);', function (g) { return g.result; }) ] },
+    { name: 'worker', notStarted: true, code: [ S('result = 42;', function (g) { g.result = 42; }) ] }
+  ],
+  goal: function (v) { return v.out.some(function (o) { return o.text === '0'; }); },
+  hint: 'Запустите worker, но не давайте ему шагать — сразу дайте main напечатать результат.',
+  success: 'Тесты проходили, потому что на быстрой машине worker обычно успевал. «Обычно» — худшее слово в многопоточности.'
+},
+{
+  id: 'join-fixed', ch: 1, type: 'sim', title: 'Исправление с join',
+  impossible: true,
+  story: 'Разработчик добавил <code>worker.join()</code>. Проверьте исправление: можно ли теперь получить 0?',
+  theory: `
+<p>Иногда код действительно корректен, и сломать его нельзя. Тогда нажмите кнопку <b>«🛡 Сломать невозможно»</b>.</p>
+<p>Но будьте осторожны: если сломать <i>можно</i>, а вы сдались — это ошибка. Именно так баги и попадают в продакшен.</p>`,
+  task: 'Попробуйте добиться, чтобы main напечатал <code>0</code>. Если это невозможно — так и скажите.',
+  vars: { result: 0 },
+  threads: [
+    { name: 'main', code: [ START('worker.start();', 1), BLOCK('worker.join();', function (g, l, v) { return v.done(1); }, null, 'WAITING'), PRINT('System.out.println(result);', function (g) { return g.result; }) ] },
+    { name: 'worker', notStarted: true, code: [ S('result = 42;', function (g) { g.result = 42; }) ] }
+  ],
+  goal: function (v) { return v.out.some(function (o) { return o.text === '0'; }); },
+  hint: 'Пока worker не завершён, main не может пройти join().',
+  why: 'join() не вернёт управление, пока worker не завершится. Кроме того, по модели памяти Java всё, что сделал поток, становится видно тому, кто дождался его через join(), — это правило happens-before.',
+  success: 'Верно: join() гарантирует и порядок, и видимость результата.'
+},
+{
+  id: 'q-states', ch: 1, type: 'quiz', title: 'Жизненный цикл потока',
+  story: 'В отчётах мониторинга мелькают слова BLOCKED и WAITING. Разберёмся, что они значат — дальше они будут встречаться постоянно.',
+  theory: `
+<table class="cmp"><tr><th>Состояние</th><th>Когда</th></tr>
+<tr><td><b>NEW</b></td><td>объект Thread создан, start() ещё не вызван</td></tr>
+<tr><td><b>RUNNABLE</b></td><td>выполняется или готов выполняться (ждёт процессор)</td></tr>
+<tr><td><b>BLOCKED</b></td><td>ждёт входа в <code>synchronized</code>: монитор занят другим потоком</td></tr>
+<tr><td><b>WAITING</b></td><td>ждёт без таймаута: <code>wait()</code>, <code>join()</code>, <code>LockSupport.park()</code> (так ждут ReentrantLock, CountDownLatch и т.п.)</td></tr>
+<tr><td><b>TIMED_WAITING</b></td><td>ждёт с таймаутом: <code>sleep(ms)</code>, <code>wait(ms)</code>, <code>join(ms)</code></td></tr>
+<tr><td><b>TERMINATED</b></td><td>run() завершился (нормально или с исключением)</td></tr></table>
+<p><b>Daemon-потоки</b> (<code>t.setDaemon(true)</code>) не мешают JVM завершиться: когда остаются только демоны, JVM выключается, не дожидаясь их.</p>
+<p><b>Прерывание:</b> <code>t.interrupt()</code> не останавливает поток силой, а лишь выставляет флаг. Блокирующие методы (<code>sleep</code>, <code>wait</code>, <code>join</code>) в ответ бросают <code>InterruptedException</code> и <b>сбрасывают</b> флаг. Поток должен сам проверять <code>Thread.currentThread().isInterrupted()</code> и корректно завершаться.</p>`,
+  questions: [
+    { q: 'Поток пытается войти в synchronized-блок, но монитор занят. Его состояние?', options: ['WAITING', 'BLOCKED', 'TIMED_WAITING', 'RUNNABLE'], correct: 1, explain: 'BLOCKED — ровно про ожидание монитора.' },
+    { q: 'Состояние потока внутри Thread.sleep(1000)?', options: ['BLOCKED', 'WAITING', 'TIMED_WAITING', 'TERMINATED'], correct: 2, explain: 'Ожидание с таймаутом — TIMED_WAITING.' },
+    { q: 'Что делает t.interrupt()?', options: ['Немедленно убивает поток', 'Выставляет флаг прерывания; sleep/wait/join в ответ бросят InterruptedException', 'Приостанавливает поток до resume()', 'Ничего, метод устарел'], correct: 1, explain: 'Прерывание кооперативное: поток сам решает, как на него реагировать. Thread.stop() давно deprecated и опасен.' },
+    { q: 'Как правильно обработать InterruptedException, если вы не можете её пробросить?', options: ['Пустой catch — проигнорировать', 'Восстановить флаг: Thread.currentThread().interrupt()', 'Вызвать System.exit()', 'Повторить sleep в цикле'], correct: 1, explain: 'Исключение сбросило флаг, поэтому его нужно восстановить, чтобы код выше по стеку узнал о прерывании.' },
+    { q: 'Что будет с daemon-потоком, когда main завершится и других обычных потоков не останется?', options: ['JVM дождётся его завершения', 'JVM завершится, демон будет остановлен на полпути', 'Он станет обычным потоком'], correct: 1, explain: 'Демоны не держат JVM. Поэтому в них нельзя делать то, что обязательно нужно довести до конца (например, запись файла).' }
+  ]
+},
+
+/* ================= ГЛАВА 2. ГОНКИ ================= */
+{
+  id: 'q-race', ch: 2, type: 'quiz', title: 'Состояние гонки',
+  story: 'Аудиторы нашли расхождения в счётчике транзакций. Код выглядит невинно: <code>count++</code>. Прежде чем ломать, разберёмся в теории.',
+  theory: `
+<p><b>Состояние гонки</b> (race condition) — ситуация, когда результат зависит от того, в каком порядке потоки выполнят свои шаги.</p>
+<p><b>Атомарная</b> операция выполняется целиком, и никто не может «вклиниться» в середину. <code>count++</code> атомарной <b>не является</b>: на самом деле это три шага.</p>
+<pre><code>int tmp = count;   // 1. прочитать
+tmp = tmp + 1;     // 2. увеличить
+count = tmp;       // 3. записать</code></pre>
+<p>Если два потока прочитают одно и то же значение, оба запишут <code>count + 1</code>, и одно увеличение потеряется. Это называется <b>lost update</b> (потерянное обновление).</p>
+<p>Похожий шаблон — <b>check-then-act</b> («проверь, потом действуй»):</p>
+<pre><code>if (!map.containsKey(key))   // проверка
+    map.put(key, value);     // действие — проверка уже могла устареть!</code></pre>
+<p><b>Критическая секция</b> — участок кода, который работает с общими данными и должен выполняться одним потоком за раз.</p>`,
+  questions: [
+    { q: 'Является ли count++ атомарной операцией?', options: ['Да, это одна инструкция', 'Нет: чтение, увеличение и запись — отдельные шаги'], correct: 1, explain: 'Даже на уровне байткода это getfield, iadd, putfield.' },
+    { q: 'Что такое race condition?', options: ['Ошибка компиляции при параллельной сборке', 'Результат зависит от порядка выполнения потоков', 'Когда поток работает слишком быстро', 'Утечка памяти'], correct: 1, explain: 'Корректность не должна зависеть от того, кто успел первым.' },
+    { q: 'Какие переменные потокобезопасны «сами по себе»?', options: ['Статические поля', 'Поля объекта, доступного нескольким потокам', 'Локальные переменные метода (если ссылка не утекла в другой поток)', 'Все переменные типа int'], correct: 2, explain: 'Локальные переменные живут в стеке потока. Но если локальная переменная ссылается на общий объект, сам объект по-прежнему общий.' }
+  ]
+},
+{
+  id: 'lost-update', ch: 2, type: 'sim', title: 'Потерянное обновление',
+  story: 'Два потока обрабатывают по одной транзакции и увеличивают общий счётчик. После их работы <code>count</code> должен быть равен 2.',
+  theory: `<p>Каждая строка ниже — отдельный атомарный шаг. Между ними планировщик (вы) может переключиться на другой поток.</p>`,
+  task: 'Добейтесь, чтобы после завершения обоих потоков <code>count == 1</code>.',
+  vars: { count: 0 },
+  threads: twin(['Поток A', 'Поток B'], function () { return { locals: { tmp: null }, code: [L('// count++ — на самом деле три шага:')].concat(inc3()) }; }),
+  goal: function (v) { return v.allDone && v.g.count === 1; },
+  hint: 'Пусть оба потока прочитают count (tmp = 0) до того, как кто-то из них запишет.',
+  success: 'Одно увеличение потеряно. На нагрузке в тысячи транзакций в секунду так «теряются» деньги и метрики.'
+},
+{
+  id: 'check-act', ch: 2, type: 'sim', title: 'Двойная выдача',
+  story: 'На счёте клиента 100 ₽. Он одновременно снимает 100 ₽ в двух банкоматах. Код проверяет баланс перед списанием, так что всё должно быть хорошо…',
+  theory: `<p>Классический <b>check-then-act</b>: между проверкой и действием мир может измениться.</p>`,
+  task: 'Уведите баланс в минус: <code>balance &lt; 0</code>.',
+  vars: { balance: 100, issued: 0 },
+  threads: twin(['Банкомат 1', 'Банкомат 2'], function () {
+    return { code: [
+      IF('if (balance >= 100) {', function (g) { return g.balance >= 100; }, 'end'),
+      S('    balance = balance - 100;', function (g) { g.balance -= 100; }),
+      S('    giveCash(100);', function (g) { g.issued += 100; }),
+      L('}', 'end')
+    ] };
+  }),
+  goal: function (v) { return v.g.balance < 0; },
+  hint: 'Оба банкомата должны пройти проверку if, пока баланс ещё 100.',
+  success: 'Клиент получил 200 ₽ при балансе 100 ₽. Проверка и действие должны выполняться атомарно — вместе, под одной блокировкой.'
+},
+{
+  id: 'lazy-init', ch: 2, type: 'sim', title: 'Два одиночки',
+  story: 'Сервис платежей — «синглтон» с ленивой инициализацией. Его конструктор открывает пул соединений к БД, и второй экземпляр — это утечка соединений.',
+  theory: `<pre><code>private static Service instance;
+
+static Service getInstance() {
+    if (instance == null)
+        instance = new Service();
+    return instance;
+}</code></pre>`,
+  task: 'Добейтесь, чтобы было создано <b>два</b> экземпляра: <code>created == 2</code>.',
+  vars: { instance: null, created: 0 },
+  threads: twin(['Поток A', 'Поток B'], function () {
+    return { code: [
+      IF('if (instance == null) {', function (g) { return g.instance === null; }, 'end'),
+      S('    instance = new Service();', function (g) { g.created++; g.instance = 'Service#' + g.created; }),
+      L('}', 'end'),
+      S('return instance;', null)
+    ] };
+  }),
+  goal: function (v) { return v.g.created === 2; },
+  hint: 'Тот же check-then-act: оба потока должны увидеть null.',
+  success: 'Два «синглтона». Правильные варианты: инициализация при загрузке класса (holder idiom), enum-синглтон или double-checked locking с volatile — до него мы ещё дойдём.'
+},
+{
+  id: 'min-two', ch: 2, type: 'sim', title: 'Головоломка: минимум', star: true,
+  story: 'Задача с собеседований в сильные команды. Каждый поток трижды выполняет <code>count++</code>. Интуиция говорит, что минимум — 3. Интуиция ошибается.',
+  theory: `<p>Подсказка для размышления: одно «долгое» обновление, сделанное по старому значению, может затереть сразу много чужих обновлений.</p>`,
+  task: 'Добейтесь, чтобы после завершения обоих потоков <code>count == 2</code>.',
+  vars: { count: 0 },
+  threads: twin(['Поток A', 'Поток B'], function () {
+    return { locals: { i: 0, tmp: null }, code: [
+      IF('for (int i = 0; i < 3; i++) {', function (g, l) { return l.i < 3; }, '$end', 'loop'),
+      S('    int tmp = count;', function (g, l) { l.tmp = g.count; }),
+      S('    tmp = tmp + 1;', function (g, l) { l.tmp++; }),
+      S('    count = tmp;', function (g, l) { g.count = l.tmp; }),
+      GOTO('}', 'loop', function (g, l) { l.i++; })
+    ] };
+  }),
+  goal: function (v) { return v.allDone && v.g.count === 2; },
+  hint: 'A читает 0 и замирает. B делает две полные итерации. A записывает 1 — работа B стёрта. Теперь B читает 1 и замирает, A доделывает оставшиеся итерации, а B в конце записывает 2.',
+  success: 'Для N итераций в каждом из двух потоков минимум всё равно 2 — при любом N. Хороший аргумент для собеседования: гонки ломают результат сильнее, чем кажется.'
+},
+{
+  id: 'q-fix-race', ch: 2, type: 'quiz', title: 'Чем лечить гонку',
+  story: 'Команда предлагает разные исправления для <code>count++</code>. Какие из них действительно работают?',
+  theory: `
+<p>Два основных подхода:</p>
+<ul><li><b>Взаимное исключение</b> — только один поток в критической секции: <code>synchronized</code>, <code>ReentrantLock</code>.</li>
+<li><b>Атомарные операции</b> — процессор умеет выполнять «сравнить и заменить» (CAS) за один неделимый шаг: <code>AtomicInteger</code>, <code>LongAdder</code>.</li></ul>
+<pre><code>private int count;
+synchronized void inc() { count++; }          // вариант 1
+
+private final AtomicInteger count = new AtomicInteger();
+void inc() { count.incrementAndGet(); }      // вариант 2</code></pre>
+<p>А ещё лучше — вообще не делить изменяемое состояние: неизменяемые объекты, данные, привязанные к своему потоку, обмен сообщениями через очереди.</p>`,
+  questions: [
+    { q: 'Какие варианты устраняют потерю обновлений в count++? (выберите все верные)', multi: true, options: ['Объявить поле volatile int count', 'Делать count++ внутри synchronized', 'Заменить на AtomicInteger.incrementAndGet()', 'Добавить Thread.sleep(10) перед count++'], correct: [1, 2], explain: 'volatile даёт видимость, но не атомарность — это проверим в главе 5. sleep лишь меняет вероятность, а не корректность.' },
+    { q: 'Метод synchronized void inc() у ОДНОГО общего объекта counter. Потоки вызывают counter.inc(). Безопасно?', options: ['Да', 'Нет'], correct: 0, explain: 'Оба потока захватывают монитор одного объекта counter, поэтому выполняют inc() по очереди.' },
+    { q: 'Что из этого пример check-then-act?', multi: true, options: ['if (!list.contains(x)) list.add(x);', 'if (instance == null) instance = new X();', 'count.incrementAndGet();', 'if (balance >= sum) balance -= sum;'], correct: [0, 1, 3], explain: 'incrementAndGet атомарен целиком. Остальные — проверка и действие, между которыми может вклиниться другой поток.' }
+  ]
+},
+
+/* ================= ГЛАВА 3. SYNCHRONIZED И ДЕДЛОКИ ================= */
+{
+  id: 'q-sync', ch: 3, type: 'quiz', title: 'Мониторы и synchronized',
+  story: 'Банк вводит synchronized повсюду. Но надо понимать, <b>на чём</b> именно мы синхронизируемся.',
+  theory: `
+<p>У каждого объекта в Java есть <b>монитор</b> (intrinsic lock). <code>synchronized</code> захватывает монитор: пока один поток его держит, другие, пытающиеся его захватить, ждут в состоянии <b>BLOCKED</b>.</p>
+<pre><code>synchronized (lock) { ... }        // монитор объекта lock
+synchronized void m() { ... }      // монитор this
+static synchronized void s() {...} // монитор объекта Account.class</code></pre>
+<ul>
+<li>Монитор освобождается при выходе из блока — <b>в том числе по исключению или return</b>.</li>
+<li>Мониторы <b>реентерабельны</b>: поток, уже владеющий монитором, может войти в него снова (например, synchronized-метод вызывает другой synchronized-метод того же объекта). Ведётся счётчик входов.</li>
+<li>Синхронизация работает, только если все потоки используют <b>один и тот же</b> объект-монитор.</li>
+<li>Кроме взаимного исключения, synchronized даёт <b>видимость</b>: всё, что поток записал до выхода из блока, увидит следующий поток, захвативший тот же монитор.</li>
+</ul>
+<p>Совет: синхронизируйтесь на <code>private final Object lock = new Object()</code>. Так чужой код не захватит ваш монитор. Никогда не синхронизируйтесь на строковых литералах или Integer: они кэшируются и могут оказаться общими с чужим кодом.</p>`,
+  questions: [
+    { q: 'На каком объекте синхронизируется static synchronized метод класса Account?', options: ['На this', 'На Account.class', 'На каждом поле класса', 'Ни на каком'], correct: 1, explain: 'Статический метод не имеет this, поэтому используется объект класса.' },
+    { q: 'synchronized void a() вызывает synchronized void b() того же объекта. Что будет?', options: ['Дедлок: поток ждёт сам себя', 'Всё нормально: мониторы реентерабельны', 'IllegalMonitorStateException'], correct: 1, explain: 'Поток повторно входит в свой же монитор, счётчик входов увеличивается.' },
+    { q: 'Внутри synchronized-блока брошено исключение. Монитор…', options: ['останется захваченным навсегда', 'будет освобождён автоматически'], correct: 1, explain: 'Компилятор генерирует освобождение монитора и на пути исключения. А вот ReentrantLock сам не освободится — нужен finally.' },
+    { q: 'Почему плохо писать synchronized ("lock") { … }?', options: ['Это синтаксическая ошибка', 'Строковые литералы интернируются: тот же объект может использовать совсем чужой код', 'Строки нельзя блокировать', 'Это медленнее'], correct: 1, explain: 'Все литералы "lock" в JVM — один объект. Чужая библиотека может случайно заблокировать ваш код.' }
+  ]
+},
+{
+  id: 'sync-ok', ch: 3, type: 'sim', title: 'Под замком', impossible: true,
+  story: 'Счётчик транзакций обернули в <code>synchronized (lock)</code>. Оба потока используют один и тот же объект <code>lock</code>. Попробуйте снова потерять обновление.',
+  theory: `<p>Обратите внимание на состояние <b>BLOCKED</b>: поток, который не может войти в synchronized, нельзя заставить сделать шаг, пока монитор не освободится.</p>`,
+  task: 'Добейтесь <code>count == 1</code> после завершения обоих потоков — или докажите, что это невозможно.',
+  vars: { count: 0 },
+  threads: twin(['Поток A', 'Поток B'], function () {
+    return { locals: { tmp: null }, code: [SYNC('synchronized (lock) {', 'lock')].concat(inc3().map(function (o) { o.text = '    ' + o.text; return o; })).concat([END('}', 'lock')]) };
+  }),
+  goal: function (v) { return v.allDone && v.g.count === 1; },
+  hint: 'Попробуйте прервать поток внутри блока и переключиться на другой. Что с ним происходит?',
+  why: 'Пока один поток внутри synchronized (lock), второй стоит в BLOCKED на входе. Чтение, увеличение и запись выполняются как единое целое относительно другого потока.',
+  success: 'Верно. Критическая секция защищена.'
+},
+{
+  id: 'wrong-lock', ch: 3, type: 'sim', title: 'Не тот замок',
+  story: 'Стажёр сделал метод обработки синхронизированным: <code>synchronized void process()</code>. Но каждый поток работает со <b>своим</b> объектом-задачей, а счётчик — статический.',
+  theory: `<pre><code>class Task implements Runnable {
+    static int count;
+    public synchronized void run() {   // монитор this — у каждого Task свой!
+        count++;
+    }
+}
+new Thread(new Task()).start();
+new Thread(new Task()).start();</code></pre>`,
+  task: 'Добейтесь <code>count == 1</code> после завершения обоих потоков.',
+  vars: { count: 0 },
+  threads: [
+    { name: 'Поток A', locals: { tmp: null }, note: 'this = task1', code: [SYNC('synchronized (this) {     // this = task1', 'task1')].concat(inc3().map(function (o) { o.text = '    ' + o.text; return o; })).concat([END('}', 'task1')]) },
+    { name: 'Поток B', locals: { tmp: null }, note: 'this = task2', code: [SYNC('synchronized (this) {     // this = task2', 'task2')].concat(inc3().map(function (o) { o.text = '    ' + o.text; return o; })).concat([END('}', 'task2')]) }
+  ],
+  goal: function (v) { return v.allDone && v.g.count === 1; },
+  hint: 'Мониторы разные — потоки друг другу не мешают.',
+  success: 'synchronized защищает данные, только если все потоки синхронизируются на одном объекте. Для статического счётчика нужен static synchronized или общий static final lock.'
+},
+{
+  id: 'partial-sync', ch: 3, type: 'sim', title: 'Полусинхронизация',
+  story: 'После инцидента с банкоматами списание обернули в synchronized. Но проверку баланса оставили снаружи — «чтение ведь безопасно».',
+  theory: `<p>Синхронизировать нужно <b>всю</b> составную операцию — и проверку, и действие.</p>`,
+  task: 'Снова уведите баланс в минус: <code>balance &lt; 0</code>.',
+  vars: { balance: 100 },
+  threads: twin(['Банкомат 1', 'Банкомат 2'], function () {
+    return { code: [
+      IF('if (balance >= 100) {', function (g) { return g.balance >= 100; }, 'end'),
+      SYNC('    synchronized (account) {', 'account'),
+      S('        balance = balance - 100;', function (g) { g.balance -= 100; }),
+      END('    }', 'account'),
+      L('}', 'end')
+    ] };
+  }),
+  goal: function (v) { return v.g.balance < 0; },
+  hint: 'Оба банкомата проходят if до входа в synchronized.',
+  success: 'Правильно — так: synchronized (account) { if (balance >= 100) balance -= 100; }'
+},
+{
+  id: 'reentrant', ch: 3, type: 'sim', title: 'Поток ждёт сам себя?', impossible: true,
+  story: 'Ревьюер в панике: «synchronized-метод <code>deposit()</code> вызывает synchronized-метод <code>log()</code> того же объекта — это же дедлок!» Проверьте.',
+  theory: `<p>Подумайте, что происходит, когда поток пытается захватить монитор, который <b>уже держит сам</b>.</p>`,
+  task: 'Добейтесь дедлока (все потоки заблокированы) — или докажите, что это невозможно.',
+  vars: { balance: 0, history: [] },
+  threads: twin(['Поток A', 'Поток B'], function () {
+    return { code: [
+      SYNC('synchronized void deposit() {   // монитор account', 'account'),
+      S('    balance += 10;', function (g) { g.balance += 10; }),
+      SYNC('    log();  →  synchronized void log() {', 'account'),
+      S('        history.add("+10");', function (g) { g.history.push('+10'); }),
+      END('    }   // выход из log()', 'account'),
+      END('}', 'account')
+    ] };
+  }),
+  goal: function (v) { return v.deadlock; },
+  hint: 'Посмотрите в панели «Мониторы» на счётчик входов (×2).',
+  why: 'Мониторы в Java реентерабельны. Поток, уже владеющий монитором account, входит в log() без ожидания — счётчик входов становится 2. Второй поток просто ждёт на входе в deposit(), пока первый не выйдет полностью.',
+  success: 'Ревьюер успокоен.'
+},
+{
+  id: 'q-deadlock', ch: 3, type: 'quiz', title: 'Взаимная блокировка',
+  story: 'Ночью сервис переводов завис намертво: CPU на нуле, запросы висят. Дежурный снял thread dump и увидел «Found one Java-level deadlock». Пора разобраться.',
+  theory: `
+<p><b>Дедлок</b> (взаимная блокировка) — потоки ждут друг друга по кругу, и ни один не может продолжить.</p>
+<pre><code>// Поток 1              // Поток 2
+synchronized (a) {      synchronized (b) {
+  synchronized (b) {      synchronized (a) {   // ← ждут друг друга вечно</code></pre>
+<p>Дедлок возможен, только если выполнены все четыре <b>условия Коффмана</b>:</p>
+<ol><li><b>Взаимное исключение</b> — ресурс может держать только один поток.</li>
+<li><b>Удержание и ожидание</b> — поток держит один ресурс и ждёт другой.</li>
+<li><b>Нет вытеснения</b> — ресурс нельзя отнять силой.</li>
+<li><b>Циклическое ожидание</b> — существует цикл: A ждёт B, B ждёт A.</li></ol>
+<p>Достаточно сломать одно условие. Самые практичные способы:</p>
+<ul><li><b>Единый порядок захвата</b> блокировок (например, по id) — ломает цикл.</li>
+<li><b>tryLock с таймаутом</b> (<code>ReentrantLock</code>): не получилось — отпустить всё и попробовать позже.</li>
+<li>Не вызывать чужой код (колбэки, слушатели) под своей блокировкой.</li></ul>
+<p>Найти дедлок: <code>jstack &lt;pid&gt;</code>, thread dump в IDE, JMX (<code>ThreadMXBean.findDeadlockedThreads()</code>).</p>`,
+  questions: [
+    { q: 'Какое условие ломает «захватывать блокировки всегда в одном порядке»?', options: ['Взаимное исключение', 'Удержание и ожидание', 'Нет вытеснения', 'Циклическое ожидание'], correct: 3, explain: 'Если все берут сначала меньший id, а потом больший, цикл невозможен.' },
+    { q: 'Какой инструмент покажет дедлок в работающей JVM?', options: ['javac', 'jstack / thread dump', 'javadoc', 'jar'], correct: 1, explain: 'jstack печатает стеки всех потоков и в конце сообщает «Found one Java-level deadlock».' },
+    { q: 'Чем помогает lock.tryLock(1, SECONDS)?', options: ['Ускоряет захват', 'Если блокировку не удалось получить за секунду, можно отпустить свои ресурсы и повторить — дедлок не вечен', 'Делает блокировку реентерабельной'], correct: 1, explain: 'Ломается условие «удержание и ожидание». Но возможен livelock — потоки постоянно уступают друг другу. Помогает случайная пауза перед повтором.' }
+  ]
+},
+{
+  id: 'deadlock', ch: 3, type: 'sim', title: 'Первый дедлок',
+  story: 'Два сервиса берут одни и те же две блокировки, но в разном порядке. Устройте им встречу.',
+  theory: `<p>Дедлок засчитывается, когда ни один незавершённый поток не может сделать шаг.</p>`,
+  task: 'Устройте дедлок.',
+  threads: [
+    { name: 'Поток A', code: [ SYNC('synchronized (lockA) {', 'lockA'), SYNC('    synchronized (lockB) {', 'lockB'), S('        work();', null), END('    }', 'lockB'), END('}', 'lockA') ] },
+    { name: 'Поток B', code: [ SYNC('synchronized (lockB) {', 'lockB'), SYNC('    synchronized (lockA) {', 'lockA'), S('        work();', null), END('    }', 'lockA'), END('}', 'lockB') ] }
+  ],
+  goal: function (v) { return v.deadlock; },
+  hint: 'Каждый поток должен захватить свою первую блокировку.',
+  success: 'A держит lockA и ждёт lockB, B держит lockB и ждёт lockA. Без перезапуска сервиса это не лечится.'
+},
+{
+  id: 'transfer', ch: 3, type: 'sim', title: 'Встречные переводы',
+  story: 'Код перевода выглядит аккуратно: сначала блокируем счёт-источник, потом счёт-получатель. Порядок везде одинаковый… или нет? Алиса переводит Бобу 100 ₽, а Боб одновременно переводит Алисе 50 ₽.',
+  theory: `<pre><code>void transfer(Account from, Account to, int amount) {
+    synchronized (from) {
+        synchronized (to) {
+            from.balance -= amount;
+            to.balance += amount;
+        }
+    }
+}</code></pre><p>Обратите внимание на локальные переменные потоков: код одинаковый, а аргументы — нет.</p>`,
+  task: 'Устройте дедлок.',
+  vars: { alice: 500, bob: 500 },
+  threads: [
+    { name: 'Перевод 1', note: 'transfer(alice → bob, 100)', locals: { from: 'alice', to: 'bob', amount: 100 }, code: transferCode() },
+    { name: 'Перевод 2', note: 'transfer(bob → alice, 50)', locals: { from: 'bob', to: 'alice', amount: 50 }, code: transferCode() }
+  ],
+  goal: function (v) { return v.deadlock; },
+  hint: 'Порядок «from, потом to» зависит от аргументов. Для встречных переводов он противоположный.',
+  success: 'Одинаковый код ещё не значит одинаковый порядок захвата. Порядок должен определяться чем-то глобальным — например, id счёта.'
+},
+{
+  id: 'ordered', ch: 3, type: 'sim', title: 'Порядок по id', impossible: true,
+  story: 'Исправленная версия: блокировки берутся в порядке возрастания id счёта, независимо от направления перевода.',
+  theory: `<pre><code>Account first  = from.id < to.id ? from : to;
+Account second = from.id < to.id ? to : from;
+synchronized (first) {
+    synchronized (second) { ... }
+}</code></pre>`,
+  task: 'Устройте дедлок — или докажите, что это невозможно.',
+  vars: { alice: 500, bob: 500 },
+  threads: [
+    { name: 'Перевод 1', note: 'transfer(alice → bob, 100)', locals: { from: 'alice', to: 'bob', amount: 100, first: null, second: null }, code: orderedCode() },
+    { name: 'Перевод 2', note: 'transfer(bob → alice, 50)', locals: { from: 'bob', to: 'alice', amount: 50, first: null, second: null }, code: orderedCode() }
+  ],
+  goal: function (v) { return v.deadlock; },
+  hint: 'Посмотрите, какую блокировку каждый поток берёт первой.',
+  why: 'Оба потока сначала берут alice (у неё меньший id), потом bob. Кто первым взял alice, тот спокойно берёт и bob. Второй ждёт на первой же блокировке, ничего не удерживая. Цикла нет — дедлока нет.',
+  success: 'Глобальный порядок захвата — самый надёжный способ избежать дедлоков.'
+},
+{
+  id: 'philosophers', ch: 3, type: 'sim', title: 'Обедающие философы',
+  story: 'Классическая задача Дейкстры. Три философа сидят за круглым столом, между соседями лежит по одной вилке. Чтобы поесть, философ берёт сначала левую вилку, потом правую.',
+  theory: `<p>Дедлок не обязательно случается между двумя потоками — цикл ожидания может быть любой длины.</p>`,
+  task: 'Устройте дедлок — оставьте всех философов голодными.',
+  vars: { meals: 0 },
+  threads: [
+    { name: 'Философ 1', note: 'левая fork1, правая fork2', locals: { left: 'fork1', right: 'fork2' }, code: philoCode() },
+    { name: 'Философ 2', note: 'левая fork2, правая fork3', locals: { left: 'fork2', right: 'fork3' }, code: philoCode() },
+    { name: 'Философ 3', note: 'левая fork3, правая fork1', locals: { left: 'fork3', right: 'fork1' }, code: philoCode() }
+  ],
+  goal: function (v) { return v.deadlock; },
+  hint: 'Каждый должен взять левую вилку.',
+  success: 'Цикл из трёх. Решение то же: упорядочить ресурсы. Например, последний философ берёт сначала правую вилку (с меньшим номером), и цикл разрывается.'
+},
+
+/* ================= ГЛАВА 4. WAIT / NOTIFY ================= */
+{
+  id: 'q-wait', ch: 4, type: 'quiz', title: 'wait и notify',
+  story: 'Очередь платёжных поручений: один поток кладёт заказы, другой забирает. Потребителю нужно как-то ждать, пока очередь пуста, не сжигая процессор в цикле.',
+  theory: `
+<p>Методы класса <code>Object</code> для ожидания условия:</p>
+<ul>
+<li><code>wait()</code> — <b>освобождает монитор</b> и усыпляет поток (WAITING) до сигнала.</li>
+<li><code>notify()</code> — будит <b>один</b> произвольный поток, ждущий на этом мониторе.</li>
+<li><code>notifyAll()</code> — будит всех.</li>
+</ul>
+<p>Все три можно вызывать <b>только владея монитором</b> (внутри synchronized на том же объекте). Иначе — <code>IllegalMonitorStateException</code>.</p>
+<p>Разбуженный поток не продолжает работу сразу: сначала он должен <b>снова захватить монитор</b> (до этого он BLOCKED). За это время условие может снова измениться.</p>
+<p>Поэтому канонический шаблон — всегда проверять условие <b>в цикле while</b>:</p>
+<pre><code>synchronized (lock) {
+    while (!condition) {   // НЕ if!
+        lock.wait();
+    }
+    // условие точно выполнено, монитор у нас
+}</code></pre>
+<p>Ещё одна причина для while — <b>ложные пробуждения</b> (spurious wakeups): спецификация разрешает wait() вернуться без всякого notify.</p>
+<p>В этой игре notify() будит поток, который ждёт дольше всех. В реальной JVM выбор не гарантирован.</p>`,
+  questions: [
+    { q: 'Что делает wait() с монитором?', options: ['Держит его, пока ждёт', 'Освобождает его на время ожидания, а после пробуждения захватывает снова', 'Удаляет монитор'], correct: 1, explain: 'Иначе никто не смог бы войти в synchronized и вызвать notify.' },
+    { q: 'Что будет при вызове lock.notify() вне synchronized (lock)?', options: ['Ничего', 'IllegalMonitorStateException', 'Дедлок', 'Разбудятся все потоки'], correct: 1, explain: 'wait/notify/notifyAll требуют владения монитором.' },
+    { q: 'Почему wait() вызывают в цикле while, а не в if?', multi: true, options: ['Пока разбуженный поток ждёт монитор, условие может снова стать ложным', 'Бывают ложные пробуждения', 'Так быстрее', 'notifyAll будит сразу несколько потоков, а условие подходит только одному'], correct: [0, 1, 3], explain: 'Все три причины сводятся к одному: после пробуждения условие нужно проверить заново.' }
+  ]
+},
+{
+  id: 'ims', ch: 4, type: 'sim', title: 'Без монитора',
+  story: 'Новый потребитель очереди написан на скорую руку: стажёр «просто вызвал wait()».',
+  theory: `<p>Проверьте, что будет, если вызвать <code>wait()</code>, не владея монитором.</p>`,
+  task: 'Получите <code>IllegalMonitorStateException</code>.',
+  vars: { queue: [] },
+  threads: [
+    { name: 'Производитель', code: [ SYNC('synchronized (queue) {', 'queue'), S('    queue.add("заказ");', function (g) { g.queue.push('заказ'); }), NOTIFY('    queue.notify();', 'queue'), END('}', 'queue') ] },
+    { name: 'Потребитель', code: [ WAIT('queue.wait();      // без synchronized!', 'queue'), S('process(queue.poll());', function (g) { g.queue.shift(); }) ] }
+  ],
+  goal: function (v) { return v.exc && v.exc.indexOf('IllegalMonitorStateException') >= 0; },
+  hint: 'Просто дайте шаг потребителю.',
+  success: 'Ошибка ловится сразу и всегда — в этом смысле самая безобидная в этой главе.'
+},
+{
+  id: 'lost-notify', ch: 4, type: 'sim', title: 'Потерянный сигнал',
+  story: 'Потребитель ждёт сигнала о готовности данных. Производитель выставляет флаг и вызывает notify. Всё «по учебнику»… почти.',
+  theory: `<p>notify() не запоминается: если в момент вызова никто не ждёт, сигнал просто пропадает.</p>`,
+  task: 'Добейтесь, чтобы потребитель уснул навсегда.',
+  vars: { ready: false },
+  threads: [
+    { name: 'Производитель', code: [ SYNC('synchronized (lock) {', 'lock'), S('    ready = true;', function (g) { g.ready = true; }), NOTIFY('    lock.notify();', 'lock'), END('}', 'lock') ] },
+    { name: 'Потребитель', code: [ SYNC('synchronized (lock) {', 'lock'), WAIT('    lock.wait();          // ждём сигнала', 'lock'), PRINT('    System.out.println("готово");', function () { return 'готово'; }), END('}', 'lock') ] }
+  ],
+  goal: function (v) { return v.deadlock; },
+  hint: 'Пусть производитель полностью отработает раньше, чем потребитель начнёт ждать.',
+  success: 'Сигнал ушёл в пустоту. Исправление — ждать не сигнала, а условия: while (!ready) lock.wait(); Тогда, если флаг уже стоит, ждать не придётся.'
+},
+{
+  id: 'if-wait', ch: 4, type: 'sim', title: 'if вместо while',
+  story: 'В очереди заказов два потребителя. Производитель кладёт один заказ и будит всех через notifyAll. Потребители проверяют очередь через <code>if</code>.',
+  theory: `<p>Разбуженный поток сначала встаёт в очередь за монитором. Пока он ждёт, другой поток может забрать то, ради чего его разбудили.</p>`,
+  task: 'Получите <code>NoSuchElementException</code> — попытку взять заказ из пустой очереди.',
+  vars: { queue: [] },
+  threads: [
+    { name: 'Производитель', code: [ SYNC('synchronized (lock) {', 'lock'), S('    queue.add("заказ");', function (g) { g.queue.push('заказ'); }), NOTIFYALL('    lock.notifyAll();', 'lock'), END('}', 'lock') ] },
+    { name: 'Потребитель 1', locals: { item: null }, code: ifWaitCode() },
+    { name: 'Потребитель 2', locals: { item: null }, code: ifWaitCode() }
+  ],
+  goal: function (v) { return v.exc && v.exc.indexOf('NoSuchElementException') >= 0; },
+  hint: 'Оба потребителя должны заснуть в wait(). Потом производитель кладёт заказ и будит обоих. Первый забирает заказ, второй после пробуждения не перепроверяет условие.',
+  success: 'После wait() условие нужно проверять заново — поэтому всегда while.'
+},
+{
+  id: 'while-wait', ch: 4, type: 'sim', title: 'while вместо if', impossible: true,
+  story: 'Исправленная версия: условие проверяется в цикле. Попробуйте получить то же исключение.',
+  theory: `<p>Обратите внимание на строку <code>}</code> цикла: после пробуждения поток возвращается к проверке условия.</p>`,
+  task: 'Получите <code>NoSuchElementException</code> — или докажите, что это невозможно.',
+  vars: { queue: [] },
+  threads: [
+    { name: 'Производитель', code: [ SYNC('synchronized (lock) {', 'lock'), S('    queue.add("заказ");', function (g) { g.queue.push('заказ'); }), NOTIFYALL('    lock.notifyAll();', 'lock'), END('}', 'lock') ] },
+    { name: 'Потребитель 1', locals: { item: null }, code: whileWaitCode() },
+    { name: 'Потребитель 2', locals: { item: null }, code: whileWaitCode() }
+  ],
+  goal: function (v) { return v.exc && v.exc.indexOf('NoSuchElementException') >= 0; },
+  hint: 'Второй потребитель после пробуждения снова проверяет queue.isEmpty().',
+  why: 'Поток выходит из цикла, только убедившись, что очередь не пуста, — и делает это, владея монитором. Значит, remove() всегда находит элемент. Второй потребитель просто снова засыпает и ждёт следующего заказа.',
+  success: 'Верно. Второй потребитель остаётся ждать — так и должно быть, ведь заказ был один.'
+},
+{
+  id: 'notify-one', ch: 4, type: 'sim', title: 'Не тот, кого будили', star: true,
+  story: 'Буфер на один элемент, два производителя и два потребителя ждут на <b>одном</b> мониторе. Для экономии вместо notifyAll используется notify(). Все проверки в while — что может пойти не так?',
+  theory: `<p>notify() будит <b>один</b> поток из всех ждущих — и это может оказаться поток «не того типа»: потребитель разбудит потребителя, а производители так и будут спать.</p>
+<p>Напоминание: в игре notify() будит того, кто ждёт дольше всех.</p>`,
+  task: 'Добейтесь, чтобы все незавершённые потоки уснули навсегда, хотя работа не сделана.',
+  vars: { buf: [] },
+  threads: [
+    { name: 'Произв. 1', locals: { item: 'x' }, code: prodCode() },
+    { name: 'Произв. 2', locals: { item: 'y' }, code: prodCode() },
+    { name: 'Потреб. 1', code: consCode() },
+    { name: 'Потреб. 2', code: consCode() }
+  ],
+  goal: function (v) { return v.deadlock; },
+  hint: 'Сначала усыпите обоих потребителей. Затем Произв. 1 кладёт x и будит Потреб. 1. Пока тот ждёт монитор, Произв. 2 видит полный буфер и засыпает. Потреб. 1 забирает x и вызывает notify() — кого он разбудит?',
+  success: 'Сигнал достался потребителю, хотя нужен был производителю. Отсюда правило: если на одном мониторе ждут потоки с разными условиями — notifyAll(). Или используйте ReentrantLock с двумя Condition (notFull и notEmpty), или сразу BlockingQueue.'
+},
+{
+  id: 'q-cond', ch: 4, type: 'quiz', title: 'Как это пишут на практике',
+  story: 'wait/notify — фундамент, но писать на нём в продакшене — плохая идея. Что использовать вместо?',
+  theory: `
+<p>Высокоуровневые инструменты из <code>java.util.concurrent</code>:</p>
+<pre><code>BlockingQueue&lt;Order&gt; queue = new ArrayBlockingQueue&lt;&gt;(100);
+queue.put(order);        // ждёт, если очередь полна
+Order o = queue.take();  // ждёт, если очередь пуста</code></pre>
+<p>Если всё-таки нужно своё условие — <code>ReentrantLock</code> + <code>Condition</code>. У одной блокировки может быть несколько условий, поэтому можно будить ровно тех, кого нужно:</p>
+<pre><code>Lock lock = new ReentrantLock();
+Condition notEmpty = lock.newCondition();
+Condition notFull  = lock.newCondition();
+
+lock.lock();
+try {
+    while (buf.isEmpty()) notEmpty.await();
+    item = buf.remove();
+    notFull.signal();     // будим только производителей
+} finally {
+    lock.unlock();
+}</code></pre>`,
+  questions: [
+    { q: 'Какой инструмент — готовое решение задачи «производитель-потребитель»?', options: ['HashMap', 'BlockingQueue', 'ThreadLocal', 'volatile'], correct: 1, explain: 'put/take блокируются сами, никаких wait/notify вручную.' },
+    { q: 'Чем Condition лучше wait/notify в задаче с буфером?', options: ['Ничем', 'У одной блокировки может быть несколько Condition: можно будить только производителей или только потребителей', 'Condition не требует блокировки'], correct: 1, explain: 'Это решает проблему из предыдущего уровня без notifyAll.' },
+    { q: 'Как правильно ждать на Condition?', options: ['if (!cond) c.await();', 'while (!cond) c.await();', 'c.await() без проверки'], correct: 1, explain: 'Правила те же, что для wait(): ложные пробуждения и повторная проверка.' }
+  ]
+},
+
+/* ================= ГЛАВА 5. ПАМЯТЬ И VOLATILE ================= */
+{
+  id: 'q-jmm', ch: 5, type: 'quiz', title: 'Модель памяти Java',
+  story: 'Самая коварная глава. Здесь баги не про «кто первый», а про то, что один поток может вообще <b>не увидеть</b> изменения другого. Или увидеть их в другом порядке.',
+  theory: `
+<p>Без синхронизации Java <b>не гарантирует</b>, что запись одного потока станет видна другому, и не гарантирует порядок, в котором она станет видна. Причины:</p>
+<ul>
+<li><b>Кэши процессора</b>: у каждого ядра свой кэш, и значение может долго «жить» в нём.</li>
+<li><b>Оптимизации JIT</b>: компилятор может вынести чтение поля из цикла, если в этом потоке поле не меняется.</li>
+<li><b>Переупорядочивание</b>: компилятор и процессор могут менять порядок независимых инструкций — внутри одного потока результат тот же, а для другого потока — нет.</li>
+</ul>
+<p>Правила видимости задаёт отношение <b>happens-before</b> (HB). Если действие X happens-before Y, то Y гарантированно видит результат X. Основные правила:</p>
+<ul>
+<li>В пределах одного потока — в порядке программы.</li>
+<li>Освобождение монитора HB последующего захвата <b>того же</b> монитора.</li>
+<li>Запись в <b>volatile</b>-поле HB последующего чтения этого поля.</li>
+<li><code>t.start()</code> HB любого действия в потоке t; все действия потока t HB возврата из <code>t.join()</code>.</li>
+<li>Транзитивность: если A HB B и B HB C, то A HB C.</li>
+</ul>
+<p><b>volatile</b> гарантирует видимость и запрещает переупорядочивание вокруг обращений к полю. Но атомарности составных операций (вроде <code>count++</code>) он <b>не даёт</b>.</p>`,
+  questions: [
+    { q: 'Что гарантирует volatile?', multi: true, options: ['Видимость записи другим потокам', 'Запрет переупорядочивания вокруг чтения/записи этого поля', 'Атомарность count++', 'Взаимное исключение, как synchronized'], correct: [0, 1], explain: 'volatile — про видимость и порядок, а не про атомарность.' },
+    { q: 'Поток A пишет x = 1 и затем пишет в volatile-поле flag = true. Поток B прочитал flag == true. Увидит ли B x == 1?', options: ['Да — по правилам volatile и транзитивности', 'Нет, x ведь не volatile', 'Не определено'], correct: 0, explain: 'Запись x HB записи flag (порядок программы), запись flag HB чтения flag. Это основа «безопасной публикации» через volatile-флаг.' },
+    { q: 'Что из этого создаёт отношение happens-before?', multi: true, options: ['Выход из synchronized(m) и последующий вход в synchronized(m)', 'Вызов Thread.sleep()', 't.start() и первое действие потока t', 'Вызов System.out.println()'], correct: [0, 2], explain: 'sleep ничего не гарантирует. println внутри синхронизирован, но полагаться на это — плохая идея.' }
+  ]
+},
+{
+  id: 'stop-flag', ch: 5, type: 'sim', title: 'Вечный цикл',
+  story: 'Фоновый поток сверки работает, пока <code>running == true</code>. Main при выключении сервиса ставит <code>running = false</code>. Иногда сервис не выключается — неделями.',
+  theory: `
+<p>Поле <code>running</code> не volatile. JIT видит, что внутри цикла его никто не меняет, и имеет право превратить</p>
+<pre><code>while (running) { work(); }</code></pre>
+<p>в</p>
+<pre><code>boolean r = running;
+while (r) { work(); }</code></pre>
+<p>В игре поток worker показан уже <b>после</b> такой оптимизации.</p>`,
+  task: 'Добейтесь, чтобы worker выполнил <code>work()</code> минимум 3 раза <b>после</b> того, как main выставил <code>running = false</code>.',
+  vars: { running: true, afterStop: 0 },
+  threads: [
+    { name: 'worker', locals: { r: null }, code: [
+      L('// после JIT-оптимизации (running не volatile):'),
+      S('boolean r = running;    // прочитано один раз', function (g, l) { l.r = g.running; }),
+      IF('while (r) {', function (g, l) { return l.r; }, '$end', 'loop'),
+      S('    work();', function (g) { if (!g.running) g.afterStop = Math.min(g.afterStop + 1, 3); }),
+      GOTO('}', 'loop')
+    ] },
+    { name: 'main', code: [ S('Thread.sleep(1000);', null), S('running = false;', function (g) { g.running = false; }), PRINT('System.out.println("стоп!");', function () { return 'стоп!'; }) ] }
+  ],
+  goal: function (v) { return v.g.afterStop >= 3; },
+  hint: 'worker уже прочитал true в локальную переменную — дальше он не смотрит на поле.',
+  success: 'Поток, который «не видит» изменения, — не теория: на серверной JVM такой цикл действительно может крутиться вечно. Лечится volatile boolean running или AtomicBoolean.'
+},
+{
+  id: 'volatile-flag', ch: 5, type: 'sim', title: 'volatile-флаг', impossible: true,
+  story: 'Флаг объявили <code>volatile boolean running</code>. Теперь JIT обязан читать поле при каждой проверке.',
+  theory: `<p>Каждая проверка условия цикла читает актуальное значение поля.</p>`,
+  task: 'Добейтесь 3 вызовов <code>work()</code> после <code>running = false</code> — или докажите, что это невозможно.',
+  vars: { running: true, afterStop: 0 },
+  threads: [
+    { name: 'worker', code: [
+      IF('while (running) {     // volatile: читается каждый раз', function (g) { return g.running; }, '$end', 'loop'),
+      S('    work();', function (g) { if (!g.running) g.afterStop = Math.min(g.afterStop + 1, 3); }),
+      GOTO('}', 'loop')
+    ] },
+    { name: 'main', code: [ S('Thread.sleep(1000);', null), S('running = false;', function (g) { g.running = false; }), PRINT('System.out.println("стоп!");', function () { return 'стоп!'; }) ] }
+  ],
+  goal: function (v) { return v.g.afterStop >= 3; },
+  hint: 'Сколько раз максимум worker может вызвать work() после записи false?',
+  why: 'Максимум один «лишний» вызов: если worker уже прошёл проверку условия, он доделает текущую итерацию. На следующей проверке он прочитает false и выйдет.',
+  success: 'Для флагов остановки volatile — правильный и достаточный инструмент.'
+},
+{
+  id: 'reorder', ch: 5, type: 'sim', title: 'Переставленные строки',
+  story: 'Поток A готовит данные и поднимает флаг готовности. Поток B ждёт флаг и читает данные. Ни одно поле не volatile.',
+  theory: `
+<p>Исходный код потока A:</p>
+<pre><code>x = 42;
+ready = true;</code></pre>
+<p>Записи независимы, поэтому компилятор или процессор может выполнить их в другом порядке. Для самого потока A ничего не изменится, а поток B это заметит. В игре поток A показан с уже переставленными строками.</p>`,
+  task: 'Добейтесь, чтобы B напечатал <code>0</code>.',
+  vars: { x: 0, ready: false },
+  threads: [
+    { name: 'Поток A', code: [ L('// исходно: x = 42; ready = true;'), L('// после переупорядочивания:'), S('ready = true;', function (g) { g.ready = true; }), S('x = 42;', function (g) { g.x = 42; }) ] },
+    { name: 'Поток B', code: [ IF('if (ready) {', function (g) { return g.ready; }, 'end'), PRINT('    System.out.println(x);', function (g) { return g.x; }), L('}', 'end') ] }
+  ],
+  goal: function (v) { return v.out.some(function (o) { return o.text === '0'; }); },
+  hint: 'B должен увидеть ready == true раньше, чем A запишет x.',
+  success: 'Флаг готов, данных нет. Если объявить ready как volatile, запись x = 42 нельзя переставить после записи ready, и B, увидев ready == true, гарантированно увидит x == 42.'
+},
+{
+  id: 'volatile-count', ch: 5, type: 'sim', title: 'volatile — не панацея',
+  story: 'Помните счётчик транзакций? Кто-то «починил» его, объявив <code>volatile int count</code>. Проверим.',
+  theory: `<p>volatile гарантирует, что каждое чтение увидит последнюю запись. Но между чтением и записью всё ещё может вклиниться другой поток.</p>`,
+  task: 'Добейтесь <code>count == 1</code> после завершения обоих потоков.',
+  vars: { count: 0 },
+  threads: twin(['Поток A', 'Поток B'], function () { return { locals: { tmp: null }, code: [L('// volatile int count;  count++ →')].concat(inc3()) }; }),
+  goal: function (v) { return v.allDone && v.g.count === 1; },
+  hint: 'Точно так же, как в главе 2.',
+  success: 'volatile не делает count++ атомарным. Нужен AtomicInteger или блокировка.'
+},
+{
+  id: 'dcl', ch: 5, type: 'sim', title: 'Double-checked locking', star: true,
+  story: 'Знаменитый антипаттерн. Синглтон конфигурации инициализируется лениво с двойной проверкой. Внешняя проверка — без блокировки, «для скорости». Поле <code>instance</code> не volatile.',
+  theory: `
+<pre><code>static Config getInstance() {
+    if (instance == null) {
+        synchronized (Config.class) {
+            if (instance == null) instance = new Config();
+        }
+    }
+    return instance;
+}</code></pre>
+<p><code>new Config()</code> — это несколько шагов: выделить память, выполнить конструктор, записать ссылку в поле. Без volatile запись ссылки можно переставить <b>раньше</b> конструктора. Тогда другой поток увидит не-null ссылку на ещё не построенный объект. В игре шаги показаны уже переставленными.</p>`,
+  task: 'Добейтесь, чтобы какой-то поток использовал объект до конструктора и напечатал <code>порт 0</code>.',
+  vars: { instance: null, port: 0 },
+  threads: twin(['Поток A', 'Поток B'], function () { return { locals: { tmp: null }, code: dclCode(false) }; }),
+  goal: function (v) { return v.out.some(function (o) { return o.text === 'порт 0'; }); },
+  hint: 'A входит в synchronized и публикует ссылку. Не давая ему выполнить конструктор, переключитесь на B: внешняя проверка без блокировки видит не-null.',
+  success: 'Поток B получил «полуготовый» объект. Исправление — volatile static Config instance: volatile-запись не может быть переставлена раньше конструктора. Или проще: holder idiom — private static class Holder { static final Config I = new Config(); }'
+},
+{
+  id: 'q-safe-pub', ch: 5, type: 'quiz', title: 'Безопасная публикация',
+  story: 'Подведём итог главы: как правильно передать объект другому потоку, чтобы тот увидел его целиком?',
+  theory: `
+<p><b>Безопасная публикация</b> — передача объекта другому потоку так, чтобы тот увидел его полностью построенным. Способы:</p>
+<ul>
+<li>записать ссылку в <b>volatile</b>-поле или в <code>AtomicReference</code>;</li>
+<li>записать и прочитать ссылку под одной и той же <b>блокировкой</b>;</li>
+<li>положить в потокобезопасную коллекцию (<code>ConcurrentHashMap</code>, <code>BlockingQueue</code>…);</li>
+<li>инициализировать в <b>статическом инициализаторе</b> (класс загружается под внутренней блокировкой JVM);</li>
+<li>сделать поля <b>final</b>: JMM гарантирует, что после завершения конструктора final-поля видны всем потокам. Условие: ссылка <code>this</code> не должна «утечь» из конструктора.</li>
+</ul>
+<p>Лучшая стратегия — <b>неизменяемые объекты</b> (все поля final, нет сеттеров, вложенные изменяемые объекты не отдаются наружу). Их можно свободно передавать между потоками. Пример — <code>String</code>, <code>record</code> с неизменяемыми полями.</p>`,
+  questions: [
+    { q: 'Какие исправления делают double-checked locking корректным?', multi: true, options: ['Объявить instance как volatile', 'Убрать внешнюю проверку (синхронизировать весь метод)', 'Использовать holder idiom (static nested class)', 'Добавить третью проверку instance == null'], correct: [0, 1, 2], explain: 'Третья проверка ничего не меняет: проблема в переупорядочивании, а не в количестве проверок.' },
+    { q: 'Что гарантирует final-поле, если this не утёк из конструктора?', options: ['Ничего особенного', 'Любой поток, получивший ссылку на объект, увидит значение final-поля, записанное в конструкторе', 'Атомарность изменений поля'], correct: 1, explain: 'Это специальное правило JMM для final-полей — основа безопасности неизменяемых объектов.' },
+    { q: 'Почему неизменяемые объекты потокобезопасны?', options: ['JVM их блокирует', 'Их состояние нельзя изменить, поэтому гонкам просто не за что бороться', 'Они хранятся в стеке'], correct: 1, explain: 'Нет изменений — нет гонок. Это самый дешёвый вид потокобезопасности.' }
+  ]
+},
+
+/* ================= ГЛАВА 6. JAVA.UTIL.CONCURRENT ================= */
+{
+  id: 'q-atomic', ch: 6, type: 'quiz', title: 'CAS и атомики',
+  story: 'Блокировки работают, но под нагрузкой потоки начинают толкаться в очереди за монитором. Пакет <code>java.util.concurrent.atomic</code> предлагает другой путь — без блокировок.',
+  theory: `
+<p>Процессор умеет атомарно выполнять операцию <b>CAS</b> (compare-and-set): «если в ячейке значение <i>old</i>, запиши <i>new</i> и верни true, иначе ничего не делай и верни false».</p>
+<p>На CAS построены <code>AtomicInteger</code>, <code>AtomicLong</code>, <code>AtomicReference</code> и др. Например, инкремент — это цикл:</p>
+<pre><code>int old, next;
+do {
+    old = value;          // прочитать
+    next = old + 1;       // вычислить
+} while (!compareAndSet(old, next));   // не вышло — кто-то успел раньше, повторить</code></pre>
+<p>Такие алгоритмы называют <b>неблокирующими</b> (lock-free): потоки не засыпают, а повторяют попытку.</p>
+<ul>
+<li>Под очень высокой конкуренцией CAS часто не удаётся, и потоки «крутятся». Для счётчиков в таком случае лучше <code>LongAdder</code>: у него несколько ячеек, которые суммируются при чтении.</li>
+<li><b>Проблема ABA</b>: значение было A, стало B, снова A. CAS не заметит изменений. Решение — <code>AtomicStampedReference</code> (значение + версия).</li>
+<li>Атомарны только отдельные операции. Два вызова подряд — уже не атомарная пара.</li>
+</ul>`,
+  questions: [
+    { q: 'Что делает compareAndSet(5, 6)?', options: ['Всегда записывает 6', 'Записывает 6, только если текущее значение 5; возвращает, удалось ли', 'Сравнивает 5 и 6', 'Ждёт, пока значение станет 5'], correct: 1, explain: 'Сравнение и запись выполняются одним неделимым действием.' },
+    { q: 'Когда LongAdder лучше AtomicLong?', options: ['Когда нужна операция compareAndSet', 'Когда много потоков часто увеличивают счётчик, а читают его редко', 'Всегда', 'Никогда'], correct: 1, explain: 'LongAdder распределяет конкуренцию по ячейкам. Но sum() не атомарный снимок, и CAS у него нет.' },
+    { q: 'if (counter.get() < 10) counter.incrementAndGet(); — потокобезопасно ли это ограничение «не больше 10»?', options: ['Да, ведь AtomicInteger', 'Нет: это check-then-act из двух атомарных операций'], correct: 1, explain: 'Правильно — через цикл CAS или updateAndGet(x -> x < 10 ? x + 1 : x).' }
+  ]
+},
+{
+  id: 'cas', ch: 6, type: 'sim', title: 'Внутри incrementAndGet',
+  story: 'Счётчик переписан на <code>AtomicInteger</code>. Посмотрим, как устроен его инкремент, и заставим CAS промахнуться.',
+  theory: `<p>Строка с <code>compareAndSet</code> выполняется одним атомарным шагом: проверка и запись неразделимы. При неудаче поток возвращается в начало цикла.</p>`,
+  task: 'Добейтесь, чтобы хотя бы один CAS не удался (<code>casFails ≥ 1</code>), и доведите оба потока до конца. Обратите внимание, каким будет <code>count</code>.',
+  vars: { count: 0, casFails: 0 },
+  threads: twin(['Поток A', 'Поток B'], function () { return { locals: { old: null, next: null }, code: casCode() }; }),
+  goal: function (v) { return v.allDone && v.g.count === 2 && v.g.casFails >= 1; },
+  hint: 'Пусть оба потока прочитают old = 0. Первый CAS удастся, второй — нет.',
+  success: 'CAS промахнулся, поток повторил попытку, и итог всё равно 2. Без блокировок и без потерь.'
+},
+{
+  id: 'cas-safe', ch: 6, type: 'sim', title: 'Сломать CAS', impossible: true,
+  story: 'Тот же код. Задача, с которой вы легко справились для обычного <code>count++</code>.',
+  theory: `<p>Подумайте, может ли поток записать значение, вычисленное из устаревшего old.</p>`,
+  task: 'Добейтесь <code>count == 1</code> после завершения обоих потоков — или докажите, что это невозможно.',
+  vars: { count: 0, casFails: 0 },
+  threads: twin(['Поток A', 'Поток B'], function () { return { locals: { old: null, next: null }, code: casCode() }; }),
+  goal: function (v) { return v.allDone && v.g.count === 1; },
+  hint: 'Что делает compareAndSet, если count уже не равен old?',
+  why: 'Запись происходит, только если count всё ещё равен old, — атомарно. Если кто-то успел изменить count, CAS вернёт false, и поток пересчитает значение. Потерять обновление нельзя.',
+  success: 'Верно. В этом и смысл CAS.'
+},
+{
+  id: 'chm', ch: 6, type: 'sim', title: 'Потокобезопасная коллекция',
+  story: 'Кэш пользователей переписали на <code>ConcurrentHashMap</code>. «Теперь всё потокобезопасно». Загрузка пользователя из БД занимает 2 секунды и должна выполняться один раз.',
+  theory: `<p>Каждый отдельный метод ConcurrentHashMap потокобезопасен. Но <code>containsKey</code> + <code>put</code> — это две операции, а не одна.</p>`,
+  task: 'Добейтесь, чтобы пользователь загрузился из БД дважды: <code>dbLoads == 2</code>.',
+  vars: { dbLoads: 0, cache: {} },
+  threads: twin(['Запрос 1', 'Запрос 2'], function () {
+    return { locals: { u: null }, code: [
+      IF('if (!cache.containsKey("user")) {', function (g) { return !('user' in g.cache); }, 'end'),
+      S('    User u = loadFromDb("user");   // 2 секунды', function (g, l) { g.dbLoads++; l.u = 'User#' + g.dbLoads; }),
+      S('    cache.put("user", u);', function (g, l) { g.cache.user = l.u; }),
+      L('}', 'end')
+    ] };
+  }),
+  goal: function (v) { return v.g.dbLoads === 2; },
+  hint: 'Снова check-then-act.',
+  success: 'Правильно — одной атомарной операцией: cache.computeIfAbsent("user", this::loadFromDb). Остальные потоки подождут, пока значение вычисляется. Ещё полезны putIfAbsent, compute и merge.'
+},
+{
+  id: 'latch', ch: 6, type: 'sim', title: 'Рано отчитался',
+  story: 'Main ждёт воркер через <code>CountDownLatch(1)</code>. Воркер, по задумке, отчитывается о завершении работы. Но сначала отчитывается, а потом работает.',
+  theory: `
+<p><code>CountDownLatch</code> — счётчик-защёлка. <code>countDown()</code> уменьшает счётчик, <code>await()</code> ждёт, пока он станет 0. Защёлка одноразовая.</p>
+<pre><code>CountDownLatch latch = new CountDownLatch(3);
+// каждый из 3 воркеров в конце:  latch.countDown();
+latch.await();   // main ждёт всех троих</code></pre>
+<p>Действия до <code>countDown()</code> happens-before возврата из <code>await()</code>. Но только действия <b>до</b>.</p>`,
+  task: 'Добейтесь, чтобы main напечатал <code>0</code>.',
+  vars: { result: 0, latch: 1 },
+  threads: [
+    { name: 'main', code: [ BLOCK('latch.await();', function (g) { return g.latch === 0; }, null, 'WAITING'), PRINT('System.out.println(result);', function (g) { return g.result; }) ] },
+    { name: 'worker', code: [ S('latch.countDown();      // «я закончил»', function (g) { g.latch--; }), S('result = 42;', function (g) { g.result = 42; }) ] }
+  ],
+  goal: function (v) { return v.out.some(function (o) { return o.text === '0'; }); },
+  hint: 'После countDown() дайте шаг main.',
+  success: 'countDown() — последнее, что должен делать поток. Обычно его ставят в finally, чтобы main не ждал вечно, если воркер упадёт.'
+},
+{
+  id: 'rl-unlock', ch: 6, type: 'sim', title: 'Забытый unlock',
+  story: 'Сервис пополнений переписали на <code>ReentrantLock</code> — «гибче, чем synchronized». Пополнение с отрицательной суммой бросает исключение.',
+  theory: `
+<p><code>ReentrantLock</code> — явная блокировка. Умеет то, чего не умеет synchronized: <code>tryLock()</code>, <code>tryLock(timeout)</code>, <code>lockInterruptibly()</code>, справедливую очередь (<code>new ReentrantLock(true)</code>), несколько <code>Condition</code>.</p>
+<p>Цена гибкости: освобождать блокировку нужно вручную. Канонический шаблон:</p>
+<pre><code>lock.lock();
+try {
+    // работа
+} finally {
+    lock.unlock();
+}</code></pre>
+<p>Поток, ждущий ReentrantLock, находится в состоянии <b>WAITING</b> (а не BLOCKED, как с synchronized).</p>`,
+  task: 'Добейтесь, чтобы второй поток навсегда застрял на <code>lock()</code>.',
+  vars: { balance: 100 },
+  threads: [
+    { name: 'Пополнение −50', locals: { amount: -50 }, code: rlCode() },
+    { name: 'Пополнение +30', locals: { amount: 30 }, code: rlCode() }
+  ],
+  goal: function (v) { return v.deadlock; },
+  hint: 'Поток с отрицательной суммой должен захватить блокировку первым.',
+  success: 'Поток умер, а блокировка осталась захваченной навсегда. synchronized освободил бы монитор сам, а ReentrantLock — только в finally.'
+},
+{
+  id: 'semaphore', ch: 6, type: 'sim', title: 'Парковка на двоих', impossible: true,
+  story: 'К внешнему API банка разрешено не больше двух одновременных подключений. Ограничение сделано через <code>Semaphore(2)</code>. Подключаются три клиента.',
+  theory: `
+<p><code>Semaphore</code> выдаёт ограниченное количество разрешений. <code>acquire()</code> забирает разрешение (или ждёт, если их нет), <code>release()</code> возвращает.</p>
+<pre><code>Semaphore permits = new Semaphore(2);
+permits.acquire();
+try { callApi(); } finally { permits.release(); }</code></pre>
+<p>Семафор — не блокировка: у разрешения нет владельца, вернуть его может любой поток.</p>`,
+  task: 'Добейтесь, чтобы к API одновременно были подключены <b>три</b> клиента — или докажите, что это невозможно.',
+  vars: { permits: 2, inside: 0 },
+  threads: twin(['Клиент 1', 'Клиент 2', 'Клиент 3'], function () {
+    return { code: [
+      BLOCK('permits.acquire();', function (g) { return g.permits > 0; }, function (g) { g.permits--; }, 'WAITING'),
+      S('connect();      // подключён', function (g) { g.inside++; }),
+      S('disconnect();', function (g) { g.inside--; }),
+      S('permits.release();', function (g) { g.permits++; })
+    ] };
+  }),
+  goal: function (v) { return v.g.inside >= 3; },
+  hint: 'Сколько разрешений может быть выдано одновременно?',
+  why: 'acquire() пропускает поток, только если есть свободное разрешение. Их всего два, и каждое возвращается лишь после disconnect(). Третий клиент ждёт в WAITING.',
+  success: 'Верно. Семафоры — стандартный способ ограничить параллелизм (bulkhead-паттерн).'
+},
+{
+  id: 'q-juc', ch: 6, type: 'quiz', title: 'Пулы, фьючерсы и коллекции',
+  story: 'В реальном коде потоки почти никогда не создают вручную. Финальная теория перед боссами.',
+  theory: `
+<p><b>ExecutorService</b> — пул потоков, которому отдают задачи:</p>
+<pre><code>ExecutorService pool = Executors.newFixedThreadPool(4);
+Future&lt;Integer&gt; f = pool.submit(() -> compute());
+int r = f.get();          // ждать результат
+pool.shutdown();          // не принимать новые задачи, доделать текущие</code></pre>
+<p><b>Дедлок пула</b> (thread starvation deadlock): задача в пуле отправляет подзадачу в <i>тот же</i> пул и ждёт её через <code>get()</code>. Если все потоки пула заняты такими ожидающими задачами, подзадачи никогда не запустятся.</p>
+<p><b>CompletableFuture</b> — асинхронные цепочки без блокирующего get():</p>
+<pre><code>CompletableFuture.supplyAsync(() -> loadUser(id), pool)
+    .thenApply(User::getEmail)
+    .thenAccept(mailer::send);</code></pre>
+<p>Без явного пула supplyAsync использует общий <code>ForkJoinPool.commonPool()</code>. Блокировать его медленным I/O — плохая идея.</p>
+<p><b>Коллекции:</b> <code>ConcurrentHashMap</code> (null-ключи и null-значения запрещены), <code>CopyOnWriteArrayList</code> (для «много читаем, редко пишем»), <code>BlockingQueue</code>. <code>Collections.synchronizedMap</code> синхронизирует отдельные методы, но обход и составные операции нужно синхронизировать вручную.</p>
+<p><b>Виртуальные потоки</b> (Java 21): <code>Executors.newVirtualThreadPerTaskExecutor()</code>. Это лёгкие потоки, которыми управляет JVM, — их можно создавать миллионами. Они хороши для задач, которые в основном ждут I/O. На CPU-задачах выигрыша нет. В Java 21–23 виртуальный поток «прилипал» к потоку-носителю (pinning) внутри synchronized; в JDK 24 это исправили.</p>`,
+  questions: [
+    { q: 'Пул на 1 поток. Задача внутри пула делает pool.submit(sub).get(). Что будет?', options: ['Подзадача выполнится в том же потоке', 'Дедлок: единственный поток ждёт подзадачу, которую некому выполнить', 'RejectedExecutionException'], correct: 1, explain: 'Thread starvation deadlock. Решения: отдельный пул для подзадач, неблокирующие цепочки CompletableFuture, ForkJoinPool.' },
+    { q: 'Какую коллекцию выбрать для списка слушателей событий, который читают постоянно, а меняют раз в час?', options: ['ArrayList', 'Collections.synchronizedList', 'CopyOnWriteArrayList', 'LinkedList'], correct: 2, explain: 'Чтение без блокировок, а каждая запись копирует массив. Идеально, когда чтений намного больше, чем записей.' },
+    { q: 'Чем shutdown() отличается от shutdownNow()?', options: ['Ничем', 'shutdown доделывает поставленные задачи; shutdownNow прерывает работающие и возвращает те, что не начались', 'shutdownNow ждёт завершения'], correct: 1, explain: 'Чтобы дождаться завершения, после shutdown() вызывают awaitTermination(timeout).' },
+    { q: 'Для какой нагрузки виртуальные потоки дают наибольший выигрыш?', options: ['Тяжёлые вычисления на CPU', 'Много одновременных задач, которые ждут сеть или БД', 'Однопоточные приложения'], correct: 1, explain: 'Пока виртуальный поток ждёт I/O, его поток-носитель выполняет другие задачи.' },
+    { q: 'Можно ли положить null в ConcurrentHashMap?', options: ['Да', 'Нет — NullPointerException'], correct: 1, explain: 'Иначе get() == null было бы неоднозначным: ключа нет или значение null? В многопоточном коде это нельзя уточнить вторым вызовом.' }
+  ]
+},
+
+/* ================= ГЛАВА 7. ФИНАЛ ================= */
+{
+  id: 'boss-bank', ch: 7, type: 'sim', title: 'Босс: идеальный перевод', star: true,
+  story: 'Финальная версия сервиса переводов. Дедлоков нет (порядок по id), блокировки на месте, ревью пройдено. На счёте Алисы 100 ₽. Одновременно идут два перевода по 70 ₽ — Бобу и Карлу.',
+  theory: `<p>Вспомните всё, что ломали: гонки, check-then-act, неполную синхронизацию.</p>`,
+  task: 'Уведите баланс Алисы в минус: <code>alice &lt; 0</code>.',
+  vars: { alice: 100, bob: 0, carl: 0 },
+  threads: [
+    { name: 'Перевод → Боб', note: 'transfer(alice → bob, 70)', locals: { from: 'alice', to: 'bob', amount: 70, first: null, second: null }, code: bossCode() },
+    { name: 'Перевод → Карл', note: 'transfer(alice → carl, 70)', locals: { from: 'alice', to: 'carl', amount: 70, first: null, second: null }, code: bossCode() }
+  ],
+  goal: function (v) { return v.g.alice < 0; },
+  hint: 'Где находится проверка баланса относительно synchronized?',
+  success: 'Проверка вне блокировки — та же ошибка из главы 3, только спрятанная в «идеальном» коде. Проверка должна быть внутри synchronized (second).'
+},
+{
+  id: 'boss-review', ch: 7, type: 'sim', title: 'Босс: финальное ревью', impossible: true,
+  story: 'Последнее ревью. Double-checked locking, но теперь поле объявлено <code>private static volatile Config instance</code>. Коллега сомневается: «Всё равно может быть порт 0». Кто прав?',
+  theory: `<p>Запись в volatile-поле нельзя переставить раньше предшествующих записей. Значит, конструктор полностью отработает до публикации ссылки.</p>`,
+  task: 'Добейтесь <code>порт 0</code> — или докажите, что это невозможно.',
+  vars: { instance: null, port: 0 },
+  threads: twin(['Поток A', 'Поток B'], function () { return { locals: { tmp: null }, code: dclCode(true) }; }),
+  goal: function (v) { return v.out.some(function (o) { return o.text === 'порт 0'; }); },
+  hint: 'Посмотрите на порядок строк внутри synchronized.',
+  why: 'С volatile порядок «сначала конструктор, потом публикация» гарантирован. Любой поток, увидевший не-null ссылку через volatile-чтение, видит и всё, что было записано до неё, включая port = 8080.',
+  success: 'Коллега неправ. Ревью пройдено.'
+},
+{
+  id: 'q-final', ch: 7, type: 'quiz', title: 'Итоговое собеседование',
+  story: 'Вас зовут на собеседование на сеньора. Вопросы — по всему, что вы сломали и починили.',
+  theory: `<p>Короткая шпаргалка:</p>
+<ul>
+<li>Гонка, check-then-act → атомарность: synchronized, Lock, Atomic*, compute*/merge.</li>
+<li>Видимость и порядок → happens-before: volatile, блокировки, start/join, final, потокобезопасные коллекции.</li>
+<li>Дедлок → единый порядок захвата, tryLock с таймаутом, меньше вложенных блокировок.</li>
+<li>Ожидание условия → BlockingQueue, Condition; wait только в while.</li>
+<li>Лучший конкурентный код — без общего изменяемого состояния.</li>
+</ul>`,
+  questions: [
+    { q: 'Какие варианты корректно реализуют потокобезопасный счётчик? (выберите все)', multi: true, options: ['AtomicLong.incrementAndGet()', 'volatile long + count++', 'synchronized-метод inc() на общем объекте', 'LongAdder.increment()'], correct: [0, 2, 3], explain: 'volatile + ++ — классическая ошибка.' },
+    { q: 'В чём разница между BLOCKED и WAITING?', options: ['Нет разницы', 'BLOCKED — ждёт монитор для входа в synchronized; WAITING — ждёт сигнала или события (wait, join, park)', 'BLOCKED — навсегда, WAITING — временно'], correct: 1, explain: 'Это различие видно в thread dump и помогает быстро понять, что происходит.' },
+    { q: 'Что может произойти с полем, которое один поток пишет, а другой читает без какой-либо синхронизации?', multi: true, options: ['Читающий поток может никогда не увидеть новое значение', 'Читающий поток может увидеть записи в другом порядке, чем они сделаны', 'JVM бросит ConcurrentModificationException', 'Читающий поток может увидеть «полусобранный» объект'], correct: [0, 1, 3], explain: 'ConcurrentModificationException — это про итерацию коллекции во время изменения, а не про модель памяти.' },
+    { q: 'Сервис завис, CPU 0%. Первое действие?', options: ['Перезапустить и забыть', 'Снять thread dump (jstack) и посмотреть, кто кого ждёт', 'Увеличить heap', 'Добавить больше потоков'], correct: 1, explain: 'CPU 0% при зависании — типичный признак дедлока или ожидания. Thread dump покажет цепочку.' },
+    { q: 'Что из этого — неблокирующий (lock-free) подход?', options: ['synchronized', 'ReentrantLock', 'Цикл с compareAndSet', 'Semaphore'], correct: 2, explain: 'CAS-алгоритмы никогда не усыпляют поток в ожидании другого.' }
+  ]
+}
+];
+
+/* ---- генераторы кода ---- */
+function transferCode() {
+  return [
+    SYNC('synchronized (from) {', function (l) { return l.from; }),
+    SYNC('    synchronized (to) {', function (l) { return l.to; }),
+    S('        from.balance -= amount;', function (g, l) { g[l.from] -= l.amount; }),
+    S('        to.balance += amount;', function (g, l) { g[l.to] += l.amount; }),
+    END('    }', function (l) { return l.to; }),
+    END('}', function (l) { return l.from; })
+  ];
+}
+function orderedCode() {
+  return [
+    S('Account first  = from.id < to.id ? from : to;', function (g, l) { l.first = l.from < l.to ? l.from : l.to; }),
+    S('Account second = from.id < to.id ? to : from;', function (g, l) { l.second = l.from < l.to ? l.to : l.from; }),
+    SYNC('synchronized (first) {', function (l) { return l.first; }),
+    SYNC('    synchronized (second) {', function (l) { return l.second; }),
+    S('        from.balance -= amount;', function (g, l) { g[l.from] -= l.amount; }),
+    S('        to.balance += amount;', function (g, l) { g[l.to] += l.amount; }),
+    END('    }', function (l) { return l.second; }),
+    END('}', function (l) { return l.first; })
+  ];
+}
+function bossCode() {
+  return [
+    IF('if (from.balance < amount) return;', function (g, l) { return g[l.from] >= l.amount; }, '$end'),
+    S('Account first  = from.id < to.id ? from : to;', function (g, l) { l.first = l.from < l.to ? l.from : l.to; }),
+    S('Account second = from.id < to.id ? to : from;', function (g, l) { l.second = l.from < l.to ? l.to : l.from; }),
+    SYNC('synchronized (first) {', function (l) { return l.first; }),
+    SYNC('    synchronized (second) {', function (l) { return l.second; }),
+    S('        from.balance -= amount;', function (g, l) { g[l.from] -= l.amount; }),
+    S('        to.balance += amount;', function (g, l) { g[l.to] += l.amount; }),
+    END('    }', function (l) { return l.second; }),
+    END('}', function (l) { return l.first; })
+  ];
+}
+function philoCode() {
+  return [
+    SYNC('synchronized (left) {', function (l) { return l.left; }),
+    SYNC('    synchronized (right) {', function (l) { return l.right; }),
+    S('        eat();', function (g) { g.meals++; }),
+    END('    }', function (l) { return l.right; }),
+    END('}', function (l) { return l.left; })
+  ];
+}
+function takeOp() {
+  return S('    String item = queue.remove();', function (g, l) {
+    if (!g.queue.length) throw jx('java.util.NoSuchElementException', 'очередь пуста');
+    l.item = g.queue.shift();
+  });
+}
+function ifWaitCode() {
+  return [
+    SYNC('synchronized (lock) {', 'lock'),
+    IF('    if (queue.isEmpty()) {', function (g) { return g.queue.length === 0; }, 'skip'),
+    WAIT('        lock.wait();', 'lock'),
+    L('    }', 'skip'),
+    takeOp(),
+    END('}', 'lock')
+  ];
+}
+function whileWaitCode() {
+  return [
+    SYNC('synchronized (lock) {', 'lock'),
+    IF('    while (queue.isEmpty()) {', function (g) { return g.queue.length === 0; }, 'take', 'w'),
+    WAIT('        lock.wait();', 'lock'),
+    GOTO('    }', 'w'),
+    ID('take', takeOp()),
+    END('}', 'lock')
+  ];
+}
+function prodCode() {
+  return [
+    SYNC('synchronized (lock) {', 'lock'),
+    IF('    while (buf.size() == 1) {', function (g) { return g.buf.length >= 1; }, 'put', 'w'),
+    WAIT('        lock.wait();', 'lock'),
+    GOTO('    }', 'w'),
+    ID('put', S('    buf.add(item);', function (g, l) { g.buf.push(l.item); })),
+    NOTIFY('    lock.notify();    // будит ОДИН поток', 'lock'),
+    END('}', 'lock')
+  ];
+}
+function consCode() {
+  return [
+    SYNC('synchronized (lock) {', 'lock'),
+    IF('    while (buf.isEmpty()) {', function (g) { return g.buf.length === 0; }, 'take', 'w'),
+    WAIT('        lock.wait();', 'lock'),
+    GOTO('    }', 'w'),
+    ID('take', S('    buf.remove();', function (g) { g.buf.shift(); })),
+    NOTIFY('    lock.notify();    // будит ОДИН поток', 'lock'),
+    END('}', 'lock')
+  ];
+}
+function dclCode(isVolatile) {
+  var body = isVolatile ? [
+    S('            Config tmp = new Config();  // port = 8080', function (g, l) { l.tmp = 'Config@1f'; g.port = 8080; }),
+    S('            instance = tmp;             // volatile-запись', function (g, l) { g.instance = l.tmp; })
+  ] : [
+    L('            // instance = new Config() после переупорядочивания:'),
+    S('            Config tmp = allocate();', function (g, l) { l.tmp = 'Config@1f'; }),
+    S('            instance = tmp;        // ссылка уже видна всем!', function (g, l) { g.instance = l.tmp; }),
+    S('            tmp.port = 8080;       // конструктор', function (g) { g.port = 8080; })
+  ];
+  return [
+    IF('if (instance == null) {', function (g) { return g.instance === null; }, 'use'),
+    SYNC('    synchronized (Config.class) {', 'Config.class'),
+    IF('        if (instance == null) {', function (g) { return g.instance === null; }, 'exit')
+  ].concat(body).concat([
+    L('        }', 'exit'),
+    END('    }', 'Config.class'),
+    L('}', 'use'),
+    PRINT('connect(instance.port);', function (g) { return 'порт ' + g.port; })
+  ]);
+}
+function casCode() {
+  return [
+    ID('loop', S('int old = count.get();', function (g, l) { l.old = g.count; })),
+    S('int next = old + 1;', function (g, l) { l.next = l.old + 1; }),
+    IF('if (!count.compareAndSet(old, next)) {   // атомарно', function (g, l) {
+      if (g.count === l.old) { g.count = l.next; return false; }
+      g.casFails = Math.min(g.casFails + 1, 5); return true;
+    }, 'done'),
+    GOTO('    continue;   // повторить', 'loop'),
+    L('}', 'done')
+  ];
+}
+function rlCode() {
+  return [
+    LOCK('lock.lock();', 'lock'),
+    IF('if (amount < 0)', function (g, l) { return l.amount < 0; }, 'ok'),
+    S('    throw new IllegalArgumentException();', function () { throw jx('java.lang.IllegalArgumentException', 'сумма < 0'); }),
+    ID('ok', S('balance += amount;', function (g, l) { g.balance += l.amount; })),
+    UNLOCK('lock.unlock();', 'lock')
+  ];
+}
+})(SIM.B);
+
+var CHAPTERS = [
+  { n: 1, title: 'Основы потоков' },
+  { n: 2, title: 'Гонки' },
+  { n: 3, title: 'synchronized и дедлоки' },
+  { n: 4, title: 'wait и notify' },
+  { n: 5, title: 'Память и volatile' },
+  { n: 6, title: 'java.util.concurrent' },
+  { n: 7, title: 'Финал' }
+];
+if (typeof module !== 'undefined') module.exports = { LEVELS: LEVELS, CHAPTERS: CHAPTERS };
+
+/* ===== Интерфейс «Гонки потоков» ===== */
+(function () {
+'use strict';
+var STORE = 'thread-race-v1';
+var progress = load();
+var cur = Math.min(progress.current || 0, LEVELS.length - 1);
+var sim = null; // { level, state, history, flash, won, replaying }
+var replayTimer = null;
+
+function load() { try { var p = JSON.parse(localStorage.getItem(STORE)); if (p && p.done) return p; } catch (e) {} return { done: {}, current: 0 }; }
+function save() { try { localStorage.setItem(STORE, JSON.stringify(progress)); } catch (e) {} }
+function $(s, r) { return (r || document).querySelector(s); }
+function $$(s, r) { return [].slice.call((r || document).querySelectorAll(s)); }
+function esc(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+
+/* ---------- подсветка Java ---------- */
+var KW = /\b(synchronized|if|while|for|return|throw|new|int|boolean|static|void|volatile|final|try|finally|continue|class|private|public)\b/g;
+function hlJava(text) {
+  var parts = text.split(/(\/\/.*$)/);
+  var code = esc(parts[0]), cm = parts[1] ? '<span class="j-c">' + esc(parts[1]) + '</span>' : '';
+  code = code.replace(/("[^"]*")|(\b\d+\b)|\b(synchronized|if|while|for|return|throw|new|int|boolean|static|void|volatile|final|try|finally|continue|class|private|public|true|false|null)\b|(\.\w+)(?=\()/g,
+    function (m, str, num, kw, meth) {
+      if (str) return '<span class="j-s">' + str + '</span>';
+      if (num) return '<span class="j-n">' + num + '</span>';
+      if (kw) return '<span class="j-k">' + kw + '</span>';
+      if (meth) return '.<span class="j-m">' + meth.slice(1) + '</span>';
+      return m;
+    });
+  return code + cm;
+}
+function fmtVal(v) {
+  if (v === null || v === undefined) return '<span class="v-null">' + (v === null ? 'null' : '—') + '</span>';
+  if (typeof v === 'string') return '<span class="v-s">"' + esc(v) + '"</span>';
+  if (typeof v === 'number') return '<span class="v-n">' + v + '</span>';
+  if (typeof v === 'boolean') return '<span class="v-k">' + v + '</span>';
+  if (Array.isArray(v)) return '[' + v.map(fmtVal).join(', ') + ']';
+  return '{' + Object.keys(v).map(function (k) { return esc(k) + '=' + fmtVal(v[k]); }).join(', ') + '}';
+}
+
+/* ---------- боковая панель ---------- */
+function doneCount() { return LEVELS.filter(function (l) { return progress.done[l.id]; }).length; }
+function renderSidebar() {
+  var h = '';
+  CHAPTERS.forEach(function (ch) {
+    var lv = LEVELS.map(function (l, i) { return { l: l, i: i }; }).filter(function (x) { return x.l.ch === ch.n; });
+    var d = lv.filter(function (x) { return progress.done[x.l.id]; }).length;
+    h += '<div class="chap"><div class="chap-t"><span>' + ch.n + '. ' + esc(ch.title) + '</span><span class="chap-c">' + d + '/' + lv.length + '</span></div>';
+    lv.forEach(function (x) {
+      var ic = x.l.type === 'quiz' ? '?' : (x.l.star ? '★' : '›');
+      h += '<button class="lv' + (x.i === cur ? ' active' : '') + (progress.done[x.l.id] ? ' done' : '') + '" data-i="' + x.i + '"><span class="lv-n">' + (x.i + 1) + '</span><span class="lv-t">' + esc(x.l.title) + '</span><span class="lv-s">' + (progress.done[x.l.id] ? '✓' : ic) + '</span></button>';
+    });
+    h += '</div>';
+  });
+  $('#levels').innerHTML = h;
+  $$('.lv').forEach(function (b) { b.onclick = function () { go(+b.dataset.i); closeNav(); }; });
+  var n = doneCount();
+  $('#prog-text').textContent = n + ' / ' + LEVELS.length;
+  $('#prog-bar').style.width = (100 * n / LEVELS.length) + '%';
+}
+function chapterOf(lv) { for (var i = 0; i < CHAPTERS.length; i++) if (CHAPTERS[i].n === lv.ch) return CHAPTERS[i]; return { n: 0, title: '' }; }
+
+function go(i) {
+  stopReplay();
+  cur = Math.max(0, Math.min(LEVELS.length - 1, i));
+  progress.current = cur; save();
+  renderSidebar(); renderLevel();
+  window.scrollTo(0, 0);
+}
+
+/* ---------- уровень ---------- */
+function renderLevel() {
+  var lv = LEVELS[cur], ch = chapterOf(lv);
+  var badge = lv.type === 'quiz' ? '<span class="badge b-quiz">Теория</span>' : '<span class="badge b-sim">Практика</span>';
+  if (lv.star) badge += '<span class="badge b-star">★ Сложный</span>';
+  var h = '<div class="crumb">Глава ' + ch.n + ' · ' + esc(ch.title) + ' ' + badge + '</div>' +
+    '<h1><span class="num">' + (cur + 1) + '.</span> ' + esc(lv.title) + (progress.done[lv.id] ? ' <span class="okmark">✓</span>' : '') + '</h1>' +
+    '<div class="story">' + lv.story + '</div>';
+  if (lv.theory) h += '<details class="theory"' + (lv.type === 'quiz' || !progress.done[lv.id] ? ' open' : '') + '><summary>📖 Теория</summary><div class="theory-b">' + lv.theory + '</div></details>';
+  if (lv.type === 'quiz') h += quizHTML(lv);
+  else h += simHTML(lv);
+  h += '<div id="feedback"></div>';
+  h += '<div class="nav"><button class="btn ghost" id="prev"' + (cur === 0 ? ' disabled' : '') + '>← Назад</button><button class="btn ghost" id="next"' + (cur === LEVELS.length - 1 ? ' disabled' : '') + '>Далее →</button></div>';
+  $('#content').innerHTML = h;
+  $('#prev').onclick = function () { go(cur - 1); };
+  $('#next').onclick = function () { go(cur + 1); };
+  if (lv.type === 'quiz') bindQuiz(lv); else bindSim(lv);
+}
+
+/* ---------- викторина ---------- */
+function quizHTML(lv) {
+  var h = '<div class="quiz">';
+  lv.questions.forEach(function (q, qi) {
+    h += '<div class="qcard" data-q="' + qi + '"><div class="qq"><span class="qn">' + (qi + 1) + '</span><span>' + esc(q.q) + (q.multi ? ' <span class="multi">несколько ответов</span>' : '') + '</span></div><div class="qopts">';
+    q.options.forEach(function (o, oi) { h += '<button class="qopt" data-o="' + oi + '">' + esc(o) + '</button>'; });
+    h += '</div>' + (q.multi ? '<button class="btn small qcheck">Проверить</button>' : '') + '<div class="qexp"></div></div>';
+  });
+  return h + '</div>';
+}
+function bindQuiz(lv) {
+  var solved = {}, already = progress.done[lv.id];
+  $$('.qcard').forEach(function (card) {
+    var qi = +card.dataset.q, q = lv.questions[qi];
+    var corr = Array.isArray(q.correct) ? q.correct : [q.correct];
+    function finish() {
+      solved[qi] = true;
+      $$('.qopt', card).forEach(function (b) { b.disabled = true; b.classList.remove('sel'); if (corr.indexOf(+b.dataset.o) >= 0) b.classList.add('right'); });
+      var cb = $('.qcheck', card); if (cb) cb.remove();
+      card.classList.add('solved');
+      $('.qexp', card).innerHTML = '<span class="good">Верно.</span> ' + esc(q.explain);
+      if (Object.keys(solved).length === lv.questions.length) complete(lv);
+    }
+    if (already) { finish(); return; }
+    $$('.qopt', card).forEach(function (b) {
+      b.onclick = function () {
+        if (solved[qi]) return;
+        if (q.multi) { b.classList.toggle('sel'); return; }
+        if (+b.dataset.o === q.correct) finish();
+        else { b.classList.add('wrong'); b.disabled = true; shake(card); $('.qexp', card).innerHTML = '<span class="bad">Не совсем.</span> Подумайте ещё.'; }
+      };
+    });
+    var cb = $('.qcheck', card);
+    if (cb) cb.onclick = function () {
+      var sel = $$('.qopt.sel', card).map(function (b) { return +b.dataset.o; }).sort();
+      if (sel.join() === corr.slice().sort().join()) finish();
+      else {
+        shake(card);
+        var miss = corr.filter(function (c) { return sel.indexOf(c) < 0; }).length, extra = sel.filter(function (c) { return corr.indexOf(c) < 0; }).length;
+        $('.qexp', card).innerHTML = '<span class="bad">Не совсем.</span> ' + (extra ? 'Среди выбранных есть неверные. ' : '') + (miss ? 'Выбраны не все верные варианты.' : '');
+      }
+    };
+  });
+}
+function shake(el) { el.classList.remove('shake'); void el.offsetWidth; el.classList.add('shake'); }
+
+/* ---------- симулятор ---------- */
+var COLORS = ['c0', 'c1', 'c2', 'c3'];
+function simHTML(lv) {
+  return '<div class="goal"><div class="goal-l">🎯 Цель</div>' + lv.task + '</div>' +
+    '<div class="toolbar">' +
+    '<button class="btn" id="undo">↶ Отменить</button>' +
+    '<button class="btn" id="restart">⟲ Сначала</button>' +
+    '<span class="sp"></span>' +
+    '<button class="btn" id="hint">💡 Подсказка</button>' +
+    '<button class="btn" id="solve">🔑 Решение</button>' +
+    '<button class="btn shield" id="imposs">🛡 Сломать невозможно</button>' +
+    '</div>' +
+    '<div id="hintbox" class="hintbox" hidden></div>' +
+    '<div id="banner"></div>' +
+    '<div class="threads n' + lv.threads.length + '" id="threads"></div>' +
+    '<div class="panels"><div class="panel"><div class="panel-t">Общая память (куча)</div><div id="mem"></div></div>' +
+    '<div class="panel"><div class="panel-t">Мониторы и блокировки</div><div id="mons"></div></div></div>' +
+    '<div class="panels"><div class="panel"><div class="panel-t">Консоль <span class="muted">System.out</span></div><div id="out" class="out"></div></div>' +
+    '<div class="panel"><div class="panel-t">Журнал шагов <span class="muted" id="stepc"></span></div><div id="log" class="log"></div></div></div>';
+}
+function bindSim(lv) {
+  sim = { level: lv, state: SIM.init(lv), history: [], log: [], won: false };
+  $('#undo').onclick = function () { stopReplay(); undo(); };
+  $('#restart').onclick = function () { stopReplay(); restart(); };
+  $('#hint').onclick = function () { var b = $('#hintbox'); b.hidden = !b.hidden; b.innerHTML = '💡 ' + esc(lv.hint); };
+  $('#solve').onclick = showSolution;
+  $('#imposs').onclick = claimImpossible;
+  renderSim();
+  if (progress.done[lv.id]) showDone(lv, true);
+}
+function restart() { sim.state = SIM.init(sim.level); sim.history = []; sim.log = []; sim.won = false; if (!progress.done[sim.level.id]) $('#feedback').innerHTML = ''; renderSim(); }
+function undo() {
+  if (!sim.history.length) return;
+  sim.state = sim.history.pop(); sim.log.pop(); sim.won = false; renderSim();
+}
+function doStep(ti) {
+  var lv = sim.level;
+  if (!SIM.canStep(lv, sim.state, ti)) { var col = $('.th[data-ti="' + ti + '"]'); if (col) shake(col); return; }
+  var ns = SIM.step(lv, sim.state, ti);
+  sim.history.push(sim.state);
+  var op = lv.threads[ti].code[ns.last.pc];
+  sim.log.push({ ti: ti, text: ns.last.note && /захватил/.test(ns.last.note) ? '(после wait) ' + ns.last.note : (op ? op.text.trim() : ''), note: ns.last.note && !/захватил/.test(ns.last.note) ? ns.last.note : '' });
+  sim.state = ns;
+  renderSim(true);
+  checkGoal();
+}
+function checkGoal() {
+  var v = SIM.view(sim.level, sim.state);
+  if (!sim.won && sim.level.goal(v)) {
+    sim.won = true;
+    if (sim.level.impossible) {
+      // не должно случаться — уровни проверены
+      $('#banner').innerHTML = '<div class="ban bad">Цель достигнута, хотя уровень считался несокрушимым.</div>';
+      return;
+    }
+    complete(sim.level);
+  }
+}
+function renderSim(animate) {
+  var lv = sim.level, s = sim.state, v = SIM.view(lv, s);
+  // потоки
+  var h = '';
+  lv.threads.forEach(function (th, ti) {
+    var t = s.threads[ti], st = SIM.status(lv, s, ti), can = SIM.canStep(lv, s, ti);
+    var lastHere = s.last && s.last.ti === ti;
+    h += '<div class="th ' + COLORS[ti % 4] + (can ? ' can' : '') + (t.done ? ' fin' : '') + '" data-ti="' + ti + '">' +
+      '<div class="th-h"><span class="th-k">' + (ti + 1) + '</span><span class="th-n">' + esc(th.name) + '</span><span class="st st-' + st.code + (st.bad ? ' st-bad' : '') + '" title="' + esc(st.why) + '">' + st.code + '</span></div>' +
+      (th.note ? '<div class="th-note">' + esc(th.note) + '</div>' : '') +
+      '<div class="code">';
+    th.code.forEach(function (op, i) {
+      var isPc = !t.done && t.pc === i, isLast = lastHere && s.last.pc === i;
+      var cls = 'ln' + (op.t === 'label' ? ' lbl' : '') + (op.t === 'goto' ? ' lbl' : '') + (isPc ? ' pc' : '') + (isLast ? ' last' + (animate ? ' flash' : '') : '') + (isPc && t.wait ? ' waitpc' : '');
+      h += '<div class="' + cls + '"><span class="gut">' + (isPc ? (can ? '▶' : '■') : '') + '</span><span class="tx">' + hlJava(op.text || ' ') + '</span></div>';
+    });
+    if (t.done) h += '<div class="ln endln"><span class="gut">✓</span><span class="tx">' + (t.exc ? '<span class="exc">✗ ' + esc(t.exc) + '</span>' : '<span class="j-c">// поток завершён</span>') + '</span></div>';
+    h += '</div>';
+    var lk = Object.keys(t.l);
+    if (lk.length) h += '<div class="locals">' + lk.map(function (k) { return '<span class="loc"><b>' + esc(k) + '</b> = ' + fmtVal(t.l[k]) + '</span>'; }).join('') + '</div>';
+    h += '<div class="th-f"><span class="why">' + esc(st.why) + '</span><button class="btn step" ' + (can ? '' : 'disabled') + ' data-ti="' + ti + '">Шаг ▸</button></div></div>';
+  });
+  $('#threads').innerHTML = h;
+  $$('.th').forEach(function (el) {
+    el.onclick = function () { if (replayTimer) return; doStep(+el.dataset.ti); };
+  });
+  // память
+  var g = s.g, gk = Object.keys(g);
+  var prev = sim.history.length ? sim.history[sim.history.length - 1].g : null;
+  $('#mem').innerHTML = gk.length ? gk.map(function (k) {
+    var changed = prev && JSON.stringify(prev[k]) !== JSON.stringify(g[k]);
+    return '<div class="var' + (changed && animate ? ' chg' : '') + '"><span class="vk">' + esc(k) + '</span><span class="vv">' + fmtVal(g[k]) + '</span></div>';
+  }).join('') : '<div class="muted">нет общих переменных</div>';
+  // мониторы
+  var mh = '', ms = Object.keys(s.mon);
+  ms.forEach(function (m) {
+    var o = s.mon[m];
+    mh += '<div class="var"><span class="vk">🔒 ' + esc(m) + '</span><span class="vv"><span class="own ' + COLORS[o.owner % 4] + '">' + esc(lv.threads[o.owner].name) + '</span>' + (o.count > 1 ? ' ×' + o.count : '') + (o.kind === 'rl' ? ' <span class="muted">ReentrantLock</span>' : '') + '</span></div>';
+  });
+  var waits = {};
+  s.threads.forEach(function (t, i) { if (t.wait) (waits[t.wait.m] = waits[t.wait.m] || []).push({ i: i, ph: t.wait.phase, seq: t.wait.seq }); });
+  Object.keys(waits).forEach(function (m) {
+    var w = waits[m].sort(function (a, b) { return a.seq - b.seq; });
+    mh += '<div class="var"><span class="vk">💤 wait-set «' + esc(m) + '»</span><span class="vv">' + w.map(function (x) { return '<span class="own ' + COLORS[x.i % 4] + '">' + esc(lv.threads[x.i].name) + (x.ph === 'reacq' ? ' (разбужен)' : '') + '</span>'; }).join(' ') + '</span></div>';
+  });
+  $('#mons').innerHTML = mh || '<div class="muted">все блокировки свободны</div>';
+  // вывод
+  $('#out').innerHTML = s.out.length ? s.out.map(function (o) { return '<div class="' + (o.err ? 'oerr' : '') + '"><span class="dot ' + COLORS[o.ti % 4] + '"></span>' + esc(o.text) + '</div>'; }).join('') : '<div class="muted">пока пусто</div>';
+  // журнал
+  $('#log').innerHTML = sim.log.length ? sim.log.map(function (e, i) {
+    return '<div><span class="ln-i">' + (i + 1) + '</span><span class="own ' + COLORS[e.ti % 4] + '">' + esc(lv.threads[e.ti].name) + '</span> ' + hlJava(e.text) + (e.note ? ' <span class="note">— ' + esc(e.note) + '</span>' : '') + '</div>';
+  }).join('') : '<div class="muted">нажмите на поток, чтобы сделать шаг</div>';
+  var lg = $('#log'); lg.scrollTop = lg.scrollHeight;
+  $('#stepc').textContent = s.steps ? '· шагов: ' + s.steps : '';
+  $('#undo').disabled = !sim.history.length;
+  // баннер состояния
+  var b = '';
+  if (!sim.won || sim.level.impossible) {
+    if (v.deadlock) b = '<div class="ban warn">⛔ <b>Ни один поток не может продолжить.</b> ' + (sim.level.goal(v) ? '' : 'Но цель уровня в другом — отмените шаги или начните сначала.') + '</div>';
+    else if (v.allDone) b = '<div class="ban warn">Все потоки завершились, а цель не достигнута. Отмените шаги или начните сначала — или, может быть, сломать это невозможно?</div>';
+  }
+  $('#banner').innerHTML = b;
+}
+
+/* ---------- решение и «невозможно» ---------- */
+function stopReplay() { if (replayTimer) { clearTimeout(replayTimer); replayTimer = null; } document.body.classList.remove('replaying'); }
+function showSolution() {
+  var lv = sim.level;
+  if (lv.impossible) {
+    if (!confirm('Показать разгадку?')) return;
+    $('#feedback').innerHTML = '<div class="fb info"><div class="fb-t">🛡 Разгадка</div>Сломать этот код нельзя. ' + esc(lv.why) + '<br><br>Нажмите «Сломать невозможно», чтобы засчитать уровень.</div>';
+    return;
+  }
+  if (!progress.done[lv.id] && !confirm('Показать решение? Программа сама сыграет нужный порядок шагов.')) return;
+  stopReplay();
+  sim.state = SIM.init(lv); sim.history = []; sim.log = []; sim.won = false;
+  $('#feedback').innerHTML = '';
+  renderSim();
+  var r = SIM.solve(lv);
+  if (!r.path) { $('#banner').innerHTML = '<div class="ban warn">Решение не найдено.</div>'; return; }
+  var i = 0;
+  document.body.classList.add('replaying');
+  (function next() {
+    if (i >= r.path.length) { stopReplay(); return; }
+    doStep(r.path[i++]);
+    replayTimer = setTimeout(next, 650);
+  })();
+}
+function claimImpossible() {
+  var lv = sim.level;
+  if (lv.impossible) { complete(lv); return; }
+  var b = $('#imposs'); shake(b);
+  $('#feedback').innerHTML = '<div class="fb bad">❌ <b>Ошибаетесь — сломать можно.</b> Именно так баги и попадают в продакшен: «у меня не воспроизводится». Ищите порядок шагов.</div>';
+}
+
+/* ---------- прохождение ---------- */
+function complete(lv) {
+  var first = !progress.done[lv.id];
+  progress.done[lv.id] = true; save();
+  renderSidebar();
+  showDone(lv, false);
+  if (first) { var h = $('h1'); if (h && !h.querySelector('.okmark')) h.insertAdjacentHTML('beforeend', ' <span class="okmark">✓</span>'); }
+  if (first && doneCount() === LEVELS.length) setTimeout(showFinale, 700);
+}
+function showDone(lv, quiet) {
+  var last = cur === LEVELS.length - 1;
+  var body = (lv.impossible && lv.why ? '<div class="why-b"><b>Почему:</b> ' + esc(lv.why) + '</div>' : '') + (lv.success ? '<div>' + esc(lv.success) + '</div>' : '');
+  $('#feedback').innerHTML = '<div class="fb good' + (quiet ? '' : ' pop') + '"><div class="fb-t">' + (quiet ? '✅ Уровень пройден' : (lv.impossible ? '🛡 Верно — сломать невозможно!' : (lv.type === 'quiz' ? '✅ Все ответы верны' : '💥 Сломано!'))) + '</div>' + body +
+    (last ? '' : '<button class="btn primary" id="gonext">Следующий уровень →</button>') + '</div>';
+  if ($('#gonext')) $('#gonext').onclick = function () { go(cur + 1); };
+}
+function showFinale() {
+  var m = $('#modal');
+  m.innerHTML = '<div class="modal-b"><div class="big">🏁</div><h2>Все потоки завершены</h2><p>Вы прошли все ' + LEVELS.length + ' уровней: гонки, мониторы, дедлоки, wait/notify, модель памяти, CAS и java.util.concurrent.</p><p>Дальше стоит почитать «Java Concurrency in Practice» (Goetz) и погонять свои классы на jcstress — это настоящий «планировщик-вредитель» для JVM.</p><button class="btn primary" id="mclose">Закрыть</button></div>';
+  m.hidden = false;
+  $('#mclose').onclick = function () { m.hidden = true; };
+}
+
+/* ---------- клавиатура и навигация ---------- */
+document.addEventListener('keydown', function (e) {
+  if (!sim || LEVELS[cur].type !== 'sim' || replayTimer) return;
+  if (e.target && /INPUT|TEXTAREA/.test(e.target.tagName)) return;
+  if (/^[1-9]$/.test(e.key) && +e.key <= sim.level.threads.length) { e.preventDefault(); doStep(+e.key - 1); }
+  else if ((e.key === 'z' || e.key === 'я') && (e.ctrlKey || e.metaKey) || e.key === 'Backspace') { e.preventDefault(); undo(); }
+});
+function closeNav() { document.body.classList.remove('nav-open'); }
+$('#burger').onclick = function () { document.body.classList.toggle('nav-open'); };
+$('#scrim').onclick = closeNav;
+$('#reset-progress').onclick = function () {
+  if (!confirm('Сбросить весь прогресс?')) return;
+  progress = { done: {}, current: 0 }; save(); go(0);
+};
+renderSidebar(); renderLevel();
+})();
+
+</script>
+</body>
+</html>
