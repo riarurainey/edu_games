@@ -53,7 +53,7 @@ main{flex:1;min-width:0;padding:28px 34px 80px}
 #content{max-width:920px;margin:0 auto}
 .crumb{font:500 12px var(--mono);color:var(--ink2);display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .tag{font:600 10px var(--sans);text-transform:uppercase;letter-spacing:.6px;padding:2px 7px;border-radius:2px;border:1.5px solid}
-.t-quiz{color:var(--blue);border-color:var(--blue)}.t-code{color:var(--sat);border-color:var(--sat)}.t-smt{color:var(--unk);border-color:var(--unk)}.t-star{color:var(--unsat);border-color:var(--unsat)}
+.t-quiz{color:var(--blue);border-color:var(--blue)}.t-code{color:var(--sat);border-color:var(--sat)}.t-smt{color:var(--unk);border-color:var(--unk)}.t-star{color:var(--unsat);border-color:var(--unsat)}.t-java{color:#c05a1a;border-color:#c05a1a}
 h1{font:600 30px/1.2 var(--serif);margin:8px 0 18px;letter-spacing:-.3px}
 h1 .num{font:500 18px var(--mono);color:var(--blue);vertical-align:middle;margin-right:4px}
 .okmark{color:var(--sat);font-size:.7em}
@@ -2953,12 +2953,1172 @@ return { run: run };
 })();
 if (typeof module !== 'undefined') module.exports = SMT;
 
+/* ===== Мини-интерпретатор Java с API com.microsoft.z3 ===== */
+var JAVA = (function () {
+'use strict';
+var C = (typeof Z3C !== 'undefined') ? Z3C : require('./core.js');
+var isZ = C.isExpr;
+function has(o, k) { return Object.prototype.hasOwnProperty.call(o, k); }
+
+/* ================= ошибки ================= */
+function JErr(kind, msg, line) { this.kind = kind; this.msg = msg; this.line = line; }
+JErr.prototype.toString = function () {
+  if (this.kind === 'compile') return 'Ошибка компиляции' + (this.line ? ', строка ' + this.line : '') + ': ' + this.msg;
+  return 'Exception in thread "main" ' + this.kind + ': ' + this.msg + (this.line ? '\n\tat Main.main (строка ' + this.line + ')' : '');
+};
+function cerr(msg, line) { return new JErr('compile', msg, line); }
+function rerr(cls, msg) { return new JErr(cls, msg); }
+function z3err(msg) { return rerr('com.microsoft.z3.Z3Exception', msg); }
+function BreakS() {} function ContinueS() {} function ReturnS(v) { this.v = v; }
+
+/* ================= лексер ================= */
+var KW = { 'if': 1, 'else': 1, 'for': 1, 'while': 1, 'do': 1, 'return': 1, 'break': 1, 'continue': 1, 'new': 1, 'try': 1, 'catch': 1, 'finally': 1, 'throw': 1, 'class': 1, 'static': 1, 'public': 1, 'private': 1, 'protected': 1, 'final': 1, 'import': 1, 'package': 1, 'throws': 1, 'true': 1, 'false': 1, 'null': 1, 'instanceof': 1, 'void': 1, 'this': 1, 'interface': 1, 'enum': 1, 'switch': 1, 'case': 1, 'default': 1 };
+var OPS = ['>>>=', '<<=', '>>=', '>>>', '...', '->', '::', '==', '!=', '<=', '>=', '&&', '||', '++', '--', '+=', '-=', '*=', '/=', '%=', '&=', '|=', '^=', '<<', '>>'];
+function lex(src) {
+  var t = [], i = 0, n = src.length, line = 1;
+  function push(k, v) { t.push({ k: k, v: v, line: line }); }
+  while (i < n) {
+    var c = src[i];
+    if (c === '\n') { line++; i++; continue; }
+    if (/\s/.test(c)) { i++; continue; }
+    if (c === '/' && src[i + 1] === '/') { while (i < n && src[i] !== '\n') i++; continue; }
+    if (c === '/' && src[i + 1] === '*') { var j = src.indexOf('*/', i + 2); if (j < 0) j = n; for (var q = i; q < j; q++) if (src[q] === '\n') line++; i = j + 2; continue; }
+    if (c === '"') {
+      var s = '', k = i + 1;
+      while (k < n && src[k] !== '"') {
+        if (src[k] === '\n') throw cerr('незакрытая строка', line);
+        if (src[k] === '\\') { var e = src[k + 1]; s += e === 'n' ? '\n' : e === 't' ? '\t' : e === '0' ? '\0' : e; k += 2; continue; }
+        s += src[k++];
+      }
+      if (k >= n) throw cerr('незакрытая строка', line);
+      push('str', s); i = k + 1; continue;
+    }
+    if (c === "'") {
+      var ch = src[i + 1], len = 3;
+      if (ch === '\\') { var e2 = src[i + 2]; ch = e2 === 'n' ? '\n' : e2 === 't' ? '\t' : e2 === '0' ? '\0' : e2; len = 4; }
+      if (src[i + len - 1] !== "'") throw cerr('неверный символьный литерал', line);
+      push('char', ch.charCodeAt(0)); i += len; continue;
+    }
+    var m = /^(0[xX][0-9a-fA-F_]+|0[bB][01_]+|\d[\d_]*(\.\d+)?([eE][+-]?\d+)?)([lLdDfF]?)/.exec(src.slice(i));
+    if (m && /\d/.test(c)) {
+      var body = m[1].replace(/_/g, ''), suf = m[4].toLowerCase();
+      if (suf === 'l') push('long', BigInt(body.toLowerCase()));
+      else if (m[2] || m[3] || suf === 'd' || suf === 'f') push('double', parseFloat(body));
+      else {
+        var bv = BigInt(body.toLowerCase());
+        if (/^0[xb]/i.test(body)) { if (bv > 0xFFFFFFFFn) throw cerr('слишком большое число для int: ' + m[0] + ' (добавьте L)', line); push('int', Number(BigInt.asIntN(32, bv))); }
+        else { if (bv > 2147483648n) throw cerr('слишком большое число для int: ' + m[0] + ' (для long добавьте L: ' + m[0] + 'L)', line); push('int', Number(bv)); }
+      }
+      i += m[0].length; continue;
+    }
+    m = /^[A-Za-z_$][A-Za-z0-9_$]*/.exec(src.slice(i));
+    if (m) { push(has(KW, m[0]) ? 'kw' : 'id', m[0]); i += m[0].length; continue; }
+    if (c === '@') { i++; var mm = /^[A-Za-z_][\w.]*/.exec(src.slice(i)); if (mm) i += mm[0].length; continue; }
+    var op = null;
+    for (var o = 0; o < OPS.length; o++) if (src.substr(i, OPS[o].length) === OPS[o]) { op = OPS[o]; break; }
+    if (!op) { if ('(){}[];,.=<>!~?:+-*/&|^%'.indexOf(c) >= 0) op = c; else throw cerr('неожиданный символ «' + c + '»', line); }
+    push('op', op); i += op.length;
+  }
+  push('eof', null);
+  return t;
+}
+
+/* ================= парсер ================= */
+var PRIM = { 'int': 1, 'long': 1, 'boolean': 1, 'char': 1, 'double': 1, 'float': 1, 'byte': 1, 'short': 1, 'void': 1, 'var': 1 };
+function Parser(t) { this.t = t; this.p = 0; }
+var P = Parser.prototype;
+P.peek = function (o) { return this.t[Math.min(this.p + (o || 0), this.t.length - 1)]; };
+P.next = function () { return this.t[this.p++]; };
+P.isOp = function (v, o) { var k = this.peek(o); return k.k === 'op' && k.v === v; };
+P.isKw = function (v, o) { var k = this.peek(o); return k.k === 'kw' && k.v === v; };
+P.acceptOp = function (v) { if (this.isOp(v)) { this.p++; return true; } return false; };
+P.desc = function (k) { return k.k === 'eof' ? 'конец программы' : '«' + (k.k === 'str' ? '"' + k.v + '"' : k.v) + '»'; };
+P.expectOp = function (v, what) { if (this.isOp(v)) return this.next(); var k = this.peek(); throw cerr('ожидалось ' + (what || '«' + v + '»') + ', а встретилось ' + this.desc(k) + (v === ';' ? ' — возможно, пропущена точка с запятой в конце строки' : ''), (v === ';' && this.p > 0) ? this.t[this.p - 1].line : k.line); };
+P.expectId = function (what) { var k = this.peek(); if (k.k === 'id') { this.p++; return k.v; } throw cerr('ожидалось ' + (what || 'имя') + ', а встретилось ' + this.desc(k), k.line); };
+
+/* попытка разобрать тип; возвращает тип или null (позиция восстанавливается при неудаче) */
+P.tryType = function () {
+  var save = this.p, k = this.peek();
+  if (!(k.k === 'id' || (k.k === 'kw' && k.v === 'void'))) return null;
+  this.p++;
+  var name = k.v;
+  while (this.isOp('.') && this.peek(1).k === 'id') { this.p += 2; name += '.' + this.t[this.p - 1].v; }
+  var args = null;
+  if (this.isOp('<')) {
+    var depth = 0, ok = false;
+    for (var q = this.p; q < this.t.length; q++) {
+      var tk = this.t[q];
+      if (tk.k === 'op') {
+        if (tk.v === '<') depth++;
+        else if (tk.v === '>') depth--;
+        else if (tk.v === '>>') depth -= 2;
+        else if (tk.v === '>>>') depth -= 3;
+        else if (!(tk.v === ',' || tk.v === '?' || tk.v === '.' || tk.v === '[' || tk.v === ']')) break;
+      } else if (tk.k !== 'id' && !(tk.k === 'kw' && tk.v === 'extends')) break;
+      if (depth <= 0) { ok = depth === 0; break; }
+    }
+    if (!ok) { this.p = save; return null; }
+    args = true; this.p = q + 1;
+  }
+  var dims = 0;
+  while (this.isOp('[') && this.isOp(']', 1)) { this.p += 2; dims++; }
+  if (this.acceptOp('...')) dims++;
+  return { name: name, dims: dims, generic: args };
+};
+P.program = function () {
+  var methods = Object.create(null), fields = [], main = null;
+  while (this.peek().k === 'kw' && (this.peek().v === 'import' || this.peek().v === 'package')) { while (!this.isOp(';')) { if (this.peek().k === 'eof') throw cerr('ожидалось «;» после import', this.peek().line); this.p++; } this.p++; }
+  var hasClass = false;
+  for (var q = this.p; q < this.t.length; q++) if (this.t[q].k === 'kw' && this.t[q].v === 'class') { hasClass = true; break; }
+  if (!hasClass) { var body = []; while (this.peek().k !== 'eof') body.push(this.stmt()); return { methods: { main: [{ name: 'main', params: [{ name: 'args', type: { name: 'String', dims: 1 } }], body: { k: 'Block', body: body }, ret: { name: 'void', dims: 0 } }] }, fields: [] }; }
+  this.mods();
+  if (!this.isKw('class')) throw cerr('ожидалось объявление класса', this.peek().line);
+  this.p++; this.expectId('имя класса');
+  this.expectOp('{');
+  while (!this.isOp('}')) {
+    if (this.peek().k === 'eof') throw cerr('не закрыт класс: не хватает «}»', this.peek().line);
+    this.mods();
+    var line = this.peek().line, type = this.tryType();
+    if (!type) throw cerr('ожидалось объявление метода или поля', line);
+    var name = this.expectId('имя метода или поля');
+    if (this.isOp('(')) {
+      this.p++;
+      var params = [];
+      while (!this.isOp(')')) {
+        this.mods();
+        var pt = this.tryType(); if (!pt) throw cerr('ожидался тип параметра', this.peek().line);
+        params.push({ type: pt, name: this.expectId('имя параметра') });
+        if (!this.acceptOp(',')) break;
+      }
+      this.expectOp(')');
+      if (this.isKw('throws')) { this.p++; do { this.tryType(); } while (this.acceptOp(',')); }
+      var b = this.block();
+      (methods[name] = Object.prototype.hasOwnProperty.call(methods, name) ? methods[name] : []).push({ name: name, params: params, body: b, ret: type, line: line });
+    } else {
+      var decls = [{ name: name, init: null }];
+      if (this.acceptOp('=')) decls[0].init = this.varInit();
+      while (this.acceptOp(',')) { var nm = this.expectId(); var it = null; if (this.acceptOp('=')) it = this.varInit(); decls.push({ name: nm, init: it }); }
+      this.expectOp(';');
+      fields.push({ k: 'Local', type: type, decls: decls, line: line });
+    }
+  }
+  this.p++;
+  if (!Object.prototype.hasOwnProperty.call(methods, 'main')) throw cerr('в классе нет метода public static void main(String[] args)', 1);
+  return { methods: methods, fields: fields };
+};
+P.mods = function () { while (this.peek().k === 'kw' && /^(public|private|protected|static|final)$/.test(this.peek().v)) this.p++; };
+P.block = function () {
+  var line = this.peek().line;
+  this.expectOp('{', '«{»');
+  var body = [];
+  while (!this.isOp('}')) { if (this.peek().k === 'eof') throw cerr('не хватает закрывающей «}» (блок открыт в строке ' + line + ')', this.peek().line); body.push(this.stmt()); }
+  this.p++;
+  return { k: 'Block', body: body, line: line };
+};
+P.isDecl = function () {
+  var save = this.p;
+  if (this.isKw('final')) this.p++;
+  var t = this.tryType(), ok = false;
+  if (t && this.peek().k === 'id') { var n = this.peek(1); ok = n.k === 'op' && (n.v === '=' || n.v === ';' || n.v === ',' || n.v === ':' || n.v === '['); }
+  this.p = save; return ok;
+};
+P.localDecl = function (noSemi) {
+  var line = this.peek().line;
+  if (this.isKw('final')) this.p++;
+  var type = this.tryType(), decls = [];
+  do {
+    var name = this.expectId('имя переменной'), dims = 0;
+    while (this.isOp('[')) { this.p++; this.expectOp(']'); dims++; }
+    var init = null;
+    if (this.acceptOp('=')) init = this.varInit();
+    decls.push({ name: name, init: init });
+  } while (this.acceptOp(','));
+  if (!noSemi) this.expectOp(';');
+  return { k: 'Local', type: type, decls: decls, line: line };
+};
+P.varInit = function () {
+  if (this.isOp('{')) { var l = this.peek().line; this.p++; var items = []; while (!this.isOp('}')) { items.push(this.varInit()); if (!this.acceptOp(',')) break; } this.expectOp('}'); return { k: 'ArrLit', items: items, line: l }; }
+  return this.expr();
+};
+P.stmt = function () {
+  var k = this.peek(), line = k.line;
+  if (k.k === 'op' && k.v === '{') return this.block();
+  if (k.k === 'op' && k.v === ';') { this.p++; return { k: 'Empty', line: line }; }
+  if (k.k === 'kw') {
+    switch (k.v) {
+      case 'if': {
+        this.p++; this.expectOp('('); var c = this.expr(); this.expectOp(')');
+        var th = this.stmt(), el = null;
+        if (this.isKw('else')) { this.p++; el = this.stmt(); }
+        return { k: 'If', c: c, t: th, e: el, line: line };
+      }
+      case 'while': { this.p++; this.expectOp('('); var wc = this.expr(); this.expectOp(')'); return { k: 'While', c: wc, body: this.stmt(), line: line }; }
+      case 'do': { this.p++; var db = this.stmt(); if (!this.isKw('while')) throw cerr('ожидалось while после do { … }', this.peek().line); this.p++; this.expectOp('('); var dc = this.expr(); this.expectOp(')'); this.expectOp(';'); return { k: 'DoWhile', c: dc, body: db, line: line }; }
+      case 'for': {
+        this.p++; this.expectOp('(');
+        var save = this.p;
+        if (this.isKw('final')) this.p++;
+        var ft = this.tryType();
+        if (ft && this.peek().k === 'id' && this.isOp(':', 1)) {
+          var nm = this.next().v; this.p++;
+          var it = this.expr(); this.expectOp(')');
+          return { k: 'ForEach', type: ft, name: nm, iter: it, body: this.stmt(), line: line };
+        }
+        this.p = save;
+        var init = [];
+        if (!this.isOp(';')) { if (this.isDecl()) init.push(this.localDecl(true)); else { do { init.push({ k: 'Expr', e: this.expr(), line: line }); } while (this.acceptOp(',')); } }
+        this.expectOp(';');
+        var cond = this.isOp(';') ? null : this.expr(); this.expectOp(';');
+        var upd = [];
+        if (!this.isOp(')')) { do { upd.push(this.expr()); } while (this.acceptOp(',')); }
+        this.expectOp(')');
+        return { k: 'For', init: init, c: cond, upd: upd, body: this.stmt(), line: line };
+      }
+      case 'return': this.p++; var rv = this.isOp(';') ? null : this.expr(); this.expectOp(';'); return { k: 'Return', e: rv, line: line };
+      case 'break': this.p++; this.expectOp(';'); return { k: 'Break', line: line };
+      case 'continue': this.p++; this.expectOp(';'); return { k: 'Continue', line: line };
+      case 'throw': this.p++; var te = this.expr(); this.expectOp(';'); return { k: 'Throw', e: te, line: line };
+      case 'try': {
+        this.p++; var res = [];
+        if (this.acceptOp('(')) { while (!this.isOp(')')) { res.push(this.localDecl(true)); if (!this.acceptOp(';')) break; } this.expectOp(')'); }
+        var tb = this.block(), catches = [], fin = null;
+        while (this.isKw('catch')) {
+          this.p++; this.expectOp('('); this.mods(); var types = [this.tryType().name]; while (this.acceptOp('|')) types.push(this.tryType().name);
+          var cn = this.expectId(); this.expectOp(')'); catches.push({ types: types, name: cn, body: this.block() });
+        }
+        if (this.isKw('finally')) { this.p++; fin = this.block(); }
+        return { k: 'Try', res: res, body: tb, catches: catches, fin: fin, line: line };
+      }
+      case 'class': case 'interface': case 'enum': case 'switch': throw cerr('конструкция «' + k.v + '» не поддерживается в этой игре', line);
+    }
+  }
+  if (this.isDecl()) return this.localDecl(false);
+  var e = this.expr();
+  this.expectOp(';');
+  return { k: 'Expr', e: e, line: line };
+};
+/* выражения */
+var ASSIGN = { '=': 1, '+=': 1, '-=': 1, '*=': 1, '/=': 1, '%=': 1, '&=': 1, '|=': 1, '^=': 1, '<<=': 1, '>>=': 1, '>>>=': 1 };
+P.expr = function () {
+  var l = this.peek().line, lhs = this.ternary(), k = this.peek();
+  if (k.k === 'op' && has(ASSIGN, k.v)) {
+    if (!(lhs.k === 'Name' || lhs.k === 'Index' || lhs.k === 'Field')) throw cerr('слева от «' + k.v + '» должна быть переменная', l);
+    this.p++; return { k: 'Assign', op: k.v, t: lhs, v: this.expr(), line: l };
+  }
+  return lhs;
+};
+P.ternary = function () {
+  var l = this.peek().line, c = this.bin(0);
+  if (this.acceptOp('?')) { var a = this.expr(); this.expectOp(':'); var b = this.ternary(); return { k: 'Cond', c: c, a: a, b: b, line: l }; }
+  return c;
+};
+var LEVELS_OP = [['||'], ['&&'], ['|'], ['^'], ['&'], ['==', '!='], ['<', '>', '<=', '>=', 'instanceof'], ['<<', '>>', '>>>'], ['+', '-'], ['*', '/', '%']];
+P.bin = function (lv) {
+  if (lv >= LEVELS_OP.length) return this.unary();
+  var l = this.peek().line, a = this.bin(lv + 1);
+  for (;;) {
+    var k = this.peek();
+    var isOp = (k.k === 'op' || (k.k === 'kw' && k.v === 'instanceof')) && LEVELS_OP[lv].indexOf(k.v) >= 0;
+    if (!isOp) break;
+    this.p++;
+    if (k.v === 'instanceof') { var ty = this.tryType(); a = { k: 'InstOf', e: a, type: ty, line: l }; continue; }
+    a = { k: 'Bin', op: k.v, a: a, b: this.bin(lv + 1), line: l };
+  }
+  return a;
+};
+P.unary = function () {
+  var k = this.peek(), l = k.line;
+  if (k.k === 'op') {
+    if (k.v === '+' || k.v === '-' || k.v === '!' || k.v === '~') {
+      this.p++;
+      if (k.v === '-' && (this.peek().k === 'int') && this.peek().v === 2147483648) { var tk = this.next(); return this.postfix({ k: 'Lit', v: -2147483648, line: l }); }
+      if (k.v === '-' && this.peek().k === 'long') { var tl = this.next(); return this.postfix({ k: 'Lit', v: -tl.v, line: l }); }
+      return { k: 'Unary', op: k.v, e: this.unary(), line: l };
+    }
+    if (k.v === '++' || k.v === '--') { this.p++; return { k: 'PreInc', op: k.v, e: this.unary(), line: l }; }
+    if (k.v === '(') {
+      var save = this.p; this.p++;
+      var t = this.tryType();
+      if (t && this.isOp(')')) {
+        var nx = this.peek(1), prim = has(PRIM, t.name) && !t.dims;
+        var startsOperand = nx.k === 'id' || nx.k === 'int' || nx.k === 'long' || nx.k === 'double' || nx.k === 'str' || nx.k === 'char' || (nx.k === 'kw' && /^(new|this|true|false|null)$/.test(nx.v)) || (nx.k === 'op' && (nx.v === '(' || nx.v === '!' || nx.v === '~' || (prim && (nx.v === '-' || nx.v === '+'))));
+        if (startsOperand && (prim || /^[A-Z]/.test(t.name.split('.').pop()))) { this.p++; return { k: 'Cast', type: t, e: this.unary(), line: l }; }
+      }
+      this.p = save;
+    }
+  }
+  return this.postfix(this.primary());
+};
+P.postfix = function (e) {
+  for (;;) {
+    var k = this.peek();
+    if (k.k !== 'op') break;
+    if (k.v === '.') {
+      this.p++;
+      if (this.isOp('<')) { var d = 0; do { var tt = this.next(); if (tt.v === '<') d++; if (tt.v === '>') d--; if (tt.v === '>>') d -= 2; } while (d > 0); }
+      var name = this.peek().k === 'kw' && this.peek().v === 'class' ? (this.p++, 'class') : this.expectId('имя метода или поля');
+      if (this.isOp('(')) { this.p++; e = { k: 'Call', o: e, name: name, args: this.args(), line: k.line }; }
+      else e = { k: 'Field', o: e, name: name, line: k.line };
+    } else if (k.v === '[') { this.p++; var i = this.expr(); this.expectOp(']'); e = { k: 'Index', o: e, i: i, line: k.line }; }
+    else if (k.v === '++' || k.v === '--') { this.p++; e = { k: 'PostInc', op: k.v, e: e, line: k.line }; }
+    else if (k.v === '::') throw cerr('ссылки на методы (::) не поддерживаются — используйте обычный цикл', k.line);
+    else break;
+  }
+  return e;
+};
+P.args = function () {
+  var a = [];
+  while (!this.isOp(')')) { a.push(this.expr()); if (!this.acceptOp(',')) break; }
+  this.expectOp(')', '«)»');
+  return a;
+};
+P.primary = function () {
+  var k = this.next(), l = k.line;
+  switch (k.k) {
+    case 'int': case 'long': case 'str': return { k: 'Lit', v: k.v, line: l };
+    case 'double': return { k: 'Lit', v: new JDouble(k.v), line: l };
+    case 'char': return { k: 'Lit', v: new JChar(k.v), line: l };
+    case 'id':
+      if (this.isOp('->')) throw cerr('лямбда-выражения не поддерживаются в этой игре', l);
+      if (this.isOp('(')) { this.p++; return { k: 'Call', o: null, name: k.v, args: this.args(), line: l }; }
+      return { k: 'Name', id: k.v, line: l };
+    case 'kw':
+      if (k.v === 'true') return { k: 'Lit', v: true, line: l };
+      if (k.v === 'false') return { k: 'Lit', v: false, line: l };
+      if (k.v === 'null') return { k: 'Lit', v: null, line: l };
+      if (k.v === 'this') throw cerr('this недоступен: все методы — static', l);
+      if (k.v === 'new') {
+        var t = this.tryTypeNoDims();
+        if (!t) throw cerr('после new ожидался тип', l);
+        if (this.isOp('[')) {
+          var dims = [];
+          while (this.isOp('[')) { this.p++; if (this.isOp(']')) { this.p++; dims.push(null); } else { dims.push(this.expr()); this.expectOp(']'); } }
+          var init = this.isOp('{') ? this.varInit() : null;
+          return { k: 'NewArr', type: t, dims: dims, init: init, line: l };
+        }
+        this.expectOp('(');
+        var args = this.args();
+        if (this.isOp('{')) throw cerr('анонимные классы не поддерживаются', l);
+        return { k: 'New', type: t, args: args, line: l };
+      }
+      break;
+    case 'op':
+      if (k.v === '(') { var e = this.expr(); this.expectOp(')', '«)»'); return e; }
+      break;
+  }
+  throw cerr('неожиданно: ' + this.desc(k), l);
+};
+P.tryTypeNoDims = function () {
+  var save = this.p, t = this.tryType();
+  if (!t) return null;
+  if (t.dims) { this.p = save; var k = this.next(); var name = k.v; while (this.isOp('.') && this.peek(1).k === 'id') { this.p += 2; name += '.' + this.t[this.p - 1].v; } if (this.isOp('<')) { var d = 0; do { var tt = this.next(); if (tt.v === '<') d++; if (tt.v === '>') d--; if (tt.v === '>>') d -= 2; } while (d > 0); } return { name: name, dims: 0 }; }
+  return t;
+};
+
+/* ================= значения ================= */
+function JChar(c) { this.c = c; }
+function JDouble(d) { this.d = d; }
+function JArr(a, et) { this.a = a; this.et = et; }
+function JList(a) { this.a = a || []; }
+function JMap() { this.m = new Map(); }
+function JObj(cls, props) { this.cls = cls; if (props) for (var k in props) this[k] = props[k]; }
+var STATUS = {}; ['SATISFIABLE', 'UNSATISFIABLE', 'UNKNOWN'].forEach(function (n) { STATUS[n] = new JObj('Status', { name: n }); });
+function statusOf(r) { return r === 'sat' ? STATUS.SATISFIABLE : r === 'unsat' ? STATUS.UNSATISFIABLE : STATUS.UNKNOWN; }
+
+function jtype(v) {
+  if (v === null || v === undefined) return 'null';
+  if (typeof v === 'number') return 'int'; if (typeof v === 'bigint') return 'long'; if (typeof v === 'boolean') return 'boolean';
+  if (typeof v === 'string') return 'String'; if (v instanceof JChar) return 'char'; if (v instanceof JDouble) return 'double';
+  if (v instanceof JArr) return (v.et || 'Object') + '[]'; if (v instanceof JList) return 'List'; if (v instanceof JMap) return 'Map';
+  if (isZ(v)) return v.op === 'const' ? (v.sort.k === 'Int' ? 'IntNum' : v.sort.k === 'BV' ? 'BitVecNum' : 'BoolExpr') : (v.sort.k === 'Int' ? 'IntExpr' : v.sort.k === 'BV' ? 'BitVecExpr' : 'BoolExpr');
+  if (v instanceof JObj) return v.cls;
+  return 'Object';
+}
+function fmtDouble(d) { if (Number.isInteger(d) && Math.abs(d) < 1e7) return d.toFixed(1); return String(d); }
+function jstr(v) {
+  if (v === null || v === undefined) return 'null';
+  if (typeof v === 'string') return v;
+  if (typeof v === 'number' || typeof v === 'boolean') return String(v);
+  if (typeof v === 'bigint') return v.toString();
+  if (v instanceof JChar) return String.fromCharCode(v.c);
+  if (v instanceof JDouble) return fmtDouble(v.d);
+  if (isZ(v)) {
+    if (v.op === 'const') return v.sort.k === 'Bool' ? String(v.val) : v.val.toString();
+    return C.toSmt(v);
+  }
+  if (v instanceof JArr) return '[' + (v.et || 'L') + '@' + (Math.abs(hashStr(v.et || '')) % 0xffffff).toString(16);
+  if (v instanceof JList) return '[' + v.a.map(jstr).join(', ') + ']';
+  if (v instanceof JMap) { var o = []; v.m.forEach(function (e) { o.push(jstr(e[0]) + '=' + jstr(e[1])); }); return '{' + o.join(', ') + '}'; }
+  if (v instanceof JObj) {
+    switch (v.cls) {
+      case 'Status': return v.name;
+      case 'Context': return 'com.microsoft.z3.Context@1b6d3586';
+      case 'Solver': case 'Optimize': return C.solverSexpr(v.asserts);
+      case 'Model': return modelStr(v.map);
+      case 'Sort': return C.sortSmt(v.s);
+      case 'FuncDecl': return v.kind === 'const' ? '(declare-fun ' + C.smtSym(v.name) + ' () ' + C.sortSmt(v.range) + ')' : '(declare-fun ' + C.smtSym(v.name) + ' (' + v.domain.map(C.sortSmt).join(' ') + ') ' + C.sortSmt(v.range) + ')';
+      case 'Symbol': return v.name;
+      case 'Handle': return v.opt.lastVals && v.opt.lastVals[v.idx] !== undefined ? v.opt.lastVals[v.idx].toString() : C.toSmt(v.e);
+      case 'FuncInterp': return funcInterpStr(v.f, v.decl);
+      case 'PrintStream': return 'java.io.PrintStream@7852e922';
+      case 'Params': return '(params)';
+    }
+  }
+  return 'Object';
+}
+function hashStr(s) { var h = 0; for (var i = 0; i < s.length; i++) h = (Math.imul(31, h) + s.charCodeAt(i)) | 0; return h; }
+function valSmt(v, s) { return C.smtVal(v, s); }
+function modelStr(map) {
+  var out = [];
+  map.forEach(function (v, k) {
+    if (k.indexOf('fn:') === 0) { out.push('(define-fun ' + C.smtSym(k.slice(3)) + ' (' + v.decl.domain.map(function (s, i) { return '(x!' + i + ' ' + C.sortSmt(s) + ')'; }).join(' ') + ') ' + C.sortSmt(v.decl.range) + '\n  ' + funcBody(v) + ')'); return; }
+    out.push('(define-fun ' + C.smtSym(v.name) + ' () ' + C.sortSmt(v.sort) + '\n  ' + valSmt(v.value, v.sort) + ')');
+  });
+  return out.join('\n');
+}
+function funcBody(f) {
+  var d = f.decl, body = valSmt(f.els, d.range);
+  for (var i = f.entries.length - 1; i >= 0; i--) {
+    var en = f.entries[i];
+    var cond = en.args.length === 1 ? '(= x!0 ' + valSmt(en.args[0], d.domain[0]) + ')' : '(and ' + en.args.map(function (a, j) { return '(= x!' + j + ' ' + valSmt(a, d.domain[j]) + ')'; }).join(' ') + ')';
+    body = '(ite ' + cond + ' ' + valSmt(en.value, d.range) + ' ' + body + ')';
+  }
+  return body;
+}
+function funcInterpStr(f, d) { return '[' + f.entries.map(function (en) { return en.args.map(function (a, i) { return valSmt(a, d.domain[i]); }).join(', ') + ' -> ' + valSmt(en.value, d.range); }).concat(['else -> ' + valSmt(f.els, d.range)]).join(', ') + ']'; }
+
+/* ---- числа Java ---- */
+function nkind(v) {
+  if (typeof v === 'number') return 'int'; if (typeof v === 'bigint') return 'long';
+  if (v instanceof JChar) return 'char'; if (v instanceof JDouble) return 'double';
+  return null;
+}
+function toInt(v) { if (typeof v === 'number') return v | 0; if (typeof v === 'bigint') return Number(BigInt.asIntN(32, v)); if (v instanceof JChar) return v.c; if (v instanceof JDouble) return isNaN(v.d) ? 0 : Math.max(-2147483648, Math.min(2147483647, Math.trunc(v.d))); throw rerr('java.lang.ClassCastException', jtype(v) + ' нельзя привести к int'); }
+function toLong(v) { if (typeof v === 'bigint') return BigInt.asIntN(64, v); if (typeof v === 'number') return BigInt(v); if (v instanceof JChar) return BigInt(v.c); if (v instanceof JDouble) return BigInt(Math.trunc(v.d)); throw rerr('java.lang.ClassCastException', jtype(v) + ' нельзя привести к long'); }
+function toD(v) { if (typeof v === 'number') return v; if (typeof v === 'bigint') return Number(v); if (v instanceof JChar) return v.c; if (v instanceof JDouble) return v.d; throw rerr('java.lang.ClassCastException', jtype(v) + ' — не число'); }
+function coerce(v, t) {
+  if (!t || t.dims) return v;
+  switch (t.name) {
+    case 'int': case 'short': case 'byte': if (nkind(v)) return t.name === 'byte' ? (toInt(v) << 24 >> 24) : t.name === 'short' ? (toInt(v) << 16 >> 16) : toInt(v); break;
+    case 'long': if (nkind(v)) return toLong(v); break;
+    case 'char': if (nkind(v)) return new JChar(toInt(v) & 0xFFFF); break;
+    case 'double': case 'float': if (nkind(v)) return new JDouble(toD(v)); break;
+    case 'Integer': if (typeof v === 'number') return v; break;
+  }
+  return v;
+}
+function numBin(op, a, b) {
+  var ka = nkind(a), kb = nkind(b);
+  if (!ka || !kb) return undefined;
+  if (ka === 'double' || kb === 'double') {
+    var x = toD(a), y = toD(b);
+    switch (op) { case '+': return new JDouble(x + y); case '-': return new JDouble(x - y); case '*': return new JDouble(x * y); case '/': return new JDouble(x / y); case '%': return new JDouble(x % y); case '<': return x < y; case '<=': return x <= y; case '>': return x > y; case '>=': return x >= y; case '==': return x === y; case '!=': return x !== y; }
+    throw rerr('java.lang.ArithmeticException', 'операция ' + op + ' не определена для double');
+  }
+  if (op === '<<' || op === '>>' || op === '>>>') {
+    if (ka === 'long') { var L = toLong(a), s = BigInt(toInt(b) & 63); if (op === '<<') return BigInt.asIntN(64, L << s); if (op === '>>') return L >> s; return BigInt.asIntN(64, BigInt.asUintN(64, L) >> s); }
+    var I = toInt(a), sh = toInt(b) & 31; if (op === '<<') return I << sh; if (op === '>>') return I >> sh; return (I >>> sh) | 0;
+  }
+  if (ka === 'long' || kb === 'long') {
+    var p = toLong(a), q = toLong(b);
+    switch (op) {
+      case '+': return BigInt.asIntN(64, p + q); case '-': return BigInt.asIntN(64, p - q); case '*': return BigInt.asIntN(64, p * q);
+      case '/': if (q === 0n) throw rerr('java.lang.ArithmeticException', '/ by zero'); return BigInt.asIntN(64, p / q);
+      case '%': if (q === 0n) throw rerr('java.lang.ArithmeticException', '/ by zero'); return p % q;
+      case '&': return p & q; case '|': return p | q; case '^': return p ^ q;
+      case '<': return p < q; case '<=': return p <= q; case '>': return p > q; case '>=': return p >= q; case '==': return p === q; case '!=': return p !== q;
+    }
+  }
+  var m = toInt(a), n = toInt(b);
+  switch (op) {
+    case '+': return (m + n) | 0; case '-': return (m - n) | 0; case '*': return Math.imul(m, n);
+    case '/': if (n === 0) throw rerr('java.lang.ArithmeticException', '/ by zero'); return (m / n) | 0;
+    case '%': if (n === 0) throw rerr('java.lang.ArithmeticException', '/ by zero'); return m % n | 0;
+    case '&': return m & n; case '|': return m | n; case '^': return m ^ n;
+    case '<': return m < n; case '<=': return m <= n; case '>': return m > n; case '>=': return m >= n; case '==': return m === n; case '!=': return m !== n;
+  }
+  return undefined;
+}
+
+/* ================= интерпретатор ================= */
+function Scope(parent) { this.v = new Map(); this.parent = parent; }
+Scope.prototype.find = function (n) { var s = this; while (s) { if (s.v.has(n)) return s.v.get(n); s = s.parent; } return null; };
+
+function Interp(opts) {
+  this.opts = opts || {};
+  this.out = []; this.partial = '';
+  this.steps = 0; this.maxSteps = this.opts.maxSteps || 3000000;
+  this.t0 = Date.now(); this.maxMs = this.opts.maxMs || 30000;
+  this.line = 0; this.checks = 0; this.maxChecks = this.opts.maxChecks || 400; this.depth = 0;
+  this.ctx = { checks: [], proves: [], solves: [] };
+  this.statics = new Scope(null);
+}
+var IP = Interp.prototype;
+IP.tick = function () {
+  if (++this.steps > this.maxSteps || ((this.steps & 4095) === 0 && Date.now() - this.t0 > this.maxMs))
+    throw rerr('TimeoutError', 'программа выполняется слишком долго — возможно, бесконечный цикл (например, while (s.check() == Status.SATISFIABLE) без нового ограничения)');
+};
+IP.write = function (s) {
+  var parts = (this.partial + s).split('\n');
+  this.partial = parts.pop();
+  for (var i = 0; i < parts.length; i++) { this.out.push(parts[i]); if (this.out.length > 3000) throw rerr('RuntimeError', 'слишком много вывода'); }
+};
+IP.run = function (src) {
+  var prog = new Parser(lex(src)).program();
+  this.methods = prog.methods;
+  var self = this;
+  prog.fields.forEach(function (f) { self.exec(f, self.statics); });
+  this.callUser('main', [new JArr([], 'String')]);
+};
+IP.callUser = function (name, args) {
+  var cands = this.methods[name];
+  if (!cands || !Object.prototype.hasOwnProperty.call(this.methods, name)) return undefined;
+  var m = null;
+  for (var i = 0; i < cands.length; i++) if (cands[i].params.length === args.length) { m = cands[i]; break; }
+  if (!m) throw cerr('метод ' + name + ' с ' + args.length + ' аргумент(ами) не найден', this.line);
+  var sc = new Scope(this.statics);
+  m.params.forEach(function (p, i) { sc.v.set(p.name, { v: coerce(args[i], p.type), t: p.type }); });
+  if (++this.depth > 300) throw rerr('java.lang.StackOverflowError', 'слишком глубокая рекурсия');
+  var saved = this.line;
+  try { this.exec(m.body, sc); }
+  catch (e) { if (e instanceof ReturnS) return coerce(e.v, m.ret); throw e; }
+  finally { this.depth--; this.line = saved; }
+  if (m.ret.name !== 'void') throw cerr('метод ' + name + ' должен вернуть значение (нет return)', m.line);
+  return null;
+};
+IP.exec = function (s, sc) {
+  this.line = s.line || this.line; this.tick();
+  switch (s.k) {
+    case 'Block': { var inner = new Scope(sc); for (var i = 0; i < s.body.length; i++) this.exec(s.body[i], inner); return; }
+    case 'Empty': return;
+    case 'Local': {
+      var self = this;
+      s.decls.forEach(function (d) {
+        if (sc.v.has(d.name)) throw cerr('переменная ' + d.name + ' уже объявлена', s.line);
+        var v = null;
+        if (d.init) v = d.init.k === 'ArrLit' ? self.arrLit(d.init, s.type, sc) : self.eval(d.init, sc);
+        else if (s.type && !s.type.dims && has(PRIM, s.type.name)) v = s.type.name === 'boolean' ? false : s.type.name === 'long' ? 0n : 0;
+        sc.v.set(d.name, { v: coerce(v, s.type), t: s.type });
+      });
+      return;
+    }
+    case 'Expr': this.eval(s.e, sc); return;
+    case 'If': if (this.cond(s.c, sc)) this.exec(s.t, sc); else if (s.e) this.exec(s.e, sc); return;
+    case 'While':
+      while (this.cond(s.c, sc)) { this.tick(); try { this.exec(s.body, sc); } catch (e) { if (e instanceof BreakS) break; if (e instanceof ContinueS) continue; throw e; } }
+      return;
+    case 'DoWhile':
+      do { this.tick(); try { this.exec(s.body, sc); } catch (e) { if (e instanceof BreakS) break; if (e instanceof ContinueS) continue; throw e; } } while (this.cond(s.c, sc));
+      return;
+    case 'For': {
+      var fs = new Scope(sc), me = this;
+      s.init.forEach(function (x) { me.exec(x, fs); });
+      while (!s.c || this.cond(s.c, fs)) {
+        this.tick();
+        try { this.exec(s.body, fs); } catch (e) { if (e instanceof BreakS) break; if (!(e instanceof ContinueS)) throw e; }
+        s.upd.forEach(function (u) { me.eval(u, fs); });
+      }
+      return;
+    }
+    case 'ForEach': {
+      var col = this.eval(s.iter, sc), items;
+      if (col instanceof JArr || col instanceof JList) items = col.a.slice();
+      else if (col instanceof JObj && col.cls === 'Set') items = col.a.slice();
+      else throw rerr('java.lang.ClassCastException', 'for-each работает с массивами и списками, а получено: ' + jtype(col));
+      for (var j = 0; j < items.length; j++) {
+        this.tick();
+        var es = new Scope(sc); es.v.set(s.name, { v: coerce(items[j], s.type), t: s.type });
+        try { this.exec(s.body, es); } catch (e) { if (e instanceof BreakS) break; if (e instanceof ContinueS) continue; throw e; }
+      }
+      return;
+    }
+    case 'Return': throw new ReturnS(s.e ? this.eval(s.e, sc) : null);
+    case 'Break': throw new BreakS();
+    case 'Continue': throw new ContinueS();
+    case 'Throw': { var ex = this.eval(s.e, sc); throw rerr(ex && ex.cls ? ex.cls : 'java.lang.RuntimeException', ex && ex.msg !== undefined ? ex.msg : ''); }
+    case 'Try': {
+      var ts = new Scope(sc), me2 = this;
+      try {
+        s.res.forEach(function (r) { me2.exec(r, ts); });
+        this.exec(s.body, ts);
+      } catch (e) {
+        if (e instanceof JErr && e.kind !== 'compile' && e.kind !== 'TimeoutError' && s.catches.length) {
+          var short = e.kind.split('.').pop(), hit = null;
+          s.catches.forEach(function (c) { if (!hit && c.types.some(function (t) { var tn = t.split('.').pop(); return tn === short || tn === 'Exception' || tn === 'Throwable' || (tn === 'RuntimeException' && short !== 'Exception'); })) hit = c; });
+          if (hit) { var cs = new Scope(sc); cs.v.set(hit.name, { v: new JObj('Exception', { cls: e.kind, msg: e.msg }), t: null }); this.exec(hit.body, cs); }
+          else throw e;
+        } else throw e;
+      } finally { if (s.fin) this.exec(s.fin, sc); }
+      return;
+    }
+  }
+  throw cerr('неподдерживаемый оператор ' + s.k, s.line);
+};
+IP.cond = function (e, sc) {
+  var v = this.eval(e, sc);
+  if (typeof v === 'boolean') return v;
+  if (isZ(v)) throw cerr('условие if/while должно быть boolean Java, а это выражение Z3 «' + C.toSmt(v) + '». Выражения Z3 нельзя проверять в if — их добавляют в решатель: s.add(...). Чтобы узнать значение, используйте модель: m.eval(...).isTrue()', this.line);
+  throw cerr('условие должно быть boolean, а получено ' + jtype(v), this.line);
+};
+IP.arrLit = function (e, type, sc) {
+  var self = this, et = type ? type.name : null;
+  var sub = type ? { name: type.name, dims: type.dims - 1 } : null;
+  return new JArr(e.items.map(function (x) { return x.k === 'ArrLit' ? self.arrLit(x, sub, sc) : coerce(self.eval(x, sc), sub); }), et);
+};
+IP.lookupVar = function (name, sc) { var r = sc.find(name); if (r) return r; return this.statics.find(name); };
+IP.eval = function (e, sc) {
+  switch (e.k) {
+    case 'Lit': return e.v;
+    case 'Name': {
+      var r = this.lookupVar(e.id, sc);
+      if (r) return r.v;
+      if (has(CLASSES, e.id)) return { cls: '__class', name: e.id };
+      throw cerr('переменная «' + e.id + '» не объявлена' + (/^(IntExpr|BoolExpr|Context|Solver|Status|Model)$/.test(e.id) ? '' : hintName(e.id)), e.line);
+    }
+    case 'Field': {
+      var o = this.eval(e.o, sc);
+      return this.getField(o, e.name, e);
+    }
+    case 'Index': {
+      var arr = this.eval(e.o, sc), i = this.eval(e.i, sc);
+      if (!(arr instanceof JArr)) throw rerr('java.lang.ClassCastException', 'индексировать можно только массив, а это ' + jtype(arr) + (arr instanceof JList ? ' — для списка используйте get(i)' : ''));
+      var ii = this.idx(arr, i); return arr.a[ii];
+    }
+    case 'Call': return this.call(e, sc);
+    case 'New': return this.newObj(e, sc);
+    case 'NewArr': {
+      if (e.init) return this.arrLit(e.init, { name: e.type.name, dims: e.dims.length }, sc);
+      var self = this, dims = e.dims.map(function (d) { return d ? toInt(self.eval(d, sc)) : null; });
+      var mk = function (k) {
+        var n = dims[k]; if (n === null) return null;
+        if (n < 0) throw rerr('java.lang.NegativeArraySizeException', String(n));
+        var a = []; for (var q = 0; q < n; q++) a.push(k + 1 < dims.length ? mk(k + 1) : defaultOf(e.type.name));
+        return new JArr(a, e.type.name);
+      };
+      return mk(0);
+    }
+    case 'Assign': return this.assign(e, sc);
+    case 'Unary': {
+      var v = this.eval(e.e, sc);
+      if (e.op === '!') { if (typeof v !== 'boolean') throw cerr(isZ(v) ? '«!» не работает с выражениями Z3 — используйте ctx.mkNot(…)' : '«!» применим только к boolean', e.line); return !v; }
+      if (isZ(v)) throw cerr('операторы Java (' + e.op + ') не работают с выражениями Z3 — используйте ' + (e.op === '-' ? 'ctx.mkUnaryMinus(…) или ctx.mkBVNeg(…)' : 'ctx.mkBVNot(…)'), e.line);
+      if (e.op === '-') { var k = nkind(v); if (k === 'long') return BigInt.asIntN(64, -v); if (k === 'double') return new JDouble(-v.d); return (-toInt(v)) | 0; }
+      if (e.op === '+') return nkind(v) === 'char' ? v.c : v;
+      if (e.op === '~') { if (typeof v === 'bigint') return ~v; return ~toInt(v); }
+      break;
+    }
+    case 'PreInc': case 'PostInc': {
+      var cur = this.eval(e.e, sc), nv = numBin(e.op === '++' ? '+' : '-', cur, 1);
+      if (nv === undefined) throw cerr('++/-- применимы только к числам', e.line);
+      if (nkind(cur) === 'long') nv = BigInt.asIntN(64, nv);
+      this.store(e.e, nv, sc);
+      return e.k === 'PreInc' ? this.load(e.e, sc) : cur;
+    }
+    case 'Bin': return this.bin(e, sc);
+    case 'Cond': return this.cond(e.c, sc) ? this.eval(e.a, sc) : this.eval(e.b, sc);
+    case 'Cast': return this.cast(e.type, this.eval(e.e, sc), e);
+    case 'InstOf': { var iv = this.eval(e.e, sc); return iv !== null && jtype(iv) === e.type.name; }
+  }
+  throw cerr('неподдерживаемое выражение ' + e.k, e.line);
+};
+function hintName(n) {
+  var known = ['ctx', 'solver', 's', 'model', 'm', 'x', 'y'];
+  if (/^(Int|Bool|BitVec|Solver|Optimize|Model)$/.test(n)) return '. Возможно, вы пишете в стиле Python? В Java переменные создаются через контекст: ctx.mkIntConst("x")';
+  return '';
+}
+function defaultOf(t) { return t === 'int' || t === 'short' || t === 'byte' ? 0 : t === 'long' ? 0n : t === 'boolean' ? false : t === 'double' ? new JDouble(0) : t === 'char' ? new JChar(0) : null; }
+IP.idx = function (arr, i) {
+  if (isZ(i)) throw rerr('java.lang.ClassCastException', 'индекс массива не может быть выражением Z3');
+  var n = toInt(i);
+  if (n < 0 || n >= arr.a.length) throw rerr('java.lang.ArrayIndexOutOfBoundsException', 'Index ' + n + ' out of bounds for length ' + arr.a.length);
+  return n;
+};
+IP.load = function (t, sc) { return this.eval(t, sc); };
+IP.store = function (t, v, sc) {
+  if (t.k === 'Name') {
+    var r = this.lookupVar(t.id, sc);
+    if (!r) throw cerr('переменная «' + t.id + '» не объявлена', t.line);
+    r.v = coerce(v, r.t); return r.v;
+  }
+  if (t.k === 'Index') {
+    var arr = this.eval(t.o, sc);
+    if (!(arr instanceof JArr)) throw rerr('java.lang.ClassCastException', 'индексировать можно только массив');
+    var i = this.idx(arr, this.eval(t.i, sc));
+    arr.a[i] = coerce(v, arr.et && has(PRIM, arr.et) ? { name: arr.et, dims: 0 } : null); return arr.a[i];
+  }
+  throw cerr('этому выражению нельзя присвоить значение', t.line);
+};
+IP.assign = function (e, sc) {
+  var v = this.eval(e.v, sc);
+  if (e.op !== '=') {
+    var cur = this.eval(e.t, sc), op = e.op.slice(0, -1);
+    if (isZ(cur) || isZ(v)) throw cerr('составное присваивание «' + e.op + '» не работает с выражениями Z3 — пишите явно, например sum = ctx.mkAdd(sum, x)', e.line);
+    var r = op === '+' && (typeof cur === 'string' || typeof v === 'string') ? jstr(cur) + jstr(v) : numBin(op, cur, v);
+    if (r === undefined) throw cerr('операция ' + e.op + ' не поддерживается для ' + jtype(cur), e.line);
+    if (nkind(cur) === 'int' || nkind(cur) === 'char') r = coerce(r, { name: nkind(cur) === 'char' ? 'char' : 'int', dims: 0 });
+    v = r;
+  }
+  return this.store(e.t, v, sc);
+};
+IP.bin = function (e, sc) {
+  var op = e.op;
+  if (op === '&&') { var a1 = this.eval(e.a, sc); this.needBool(a1, op, e); if (!a1) return false; var b1 = this.eval(e.b, sc); this.needBool(b1, op, e); return b1; }
+  if (op === '||') { var a2 = this.eval(e.a, sc); this.needBool(a2, op, e); if (a2) return true; var b2 = this.eval(e.b, sc); this.needBool(b2, op, e); return b2; }
+  var a = this.eval(e.a, sc), b = this.eval(e.b, sc);
+  if (op === '+' && (typeof a === 'string' || typeof b === 'string')) return jstr(a) + jstr(b);
+  if (isZ(a) || isZ(b)) {
+    if (op === '==' || op === '!=') { var same = isZ(a) && isZ(b) && C.structEq(a, b); return op === '==' ? same : !same; }
+    var m = { '+': 'mkAdd / mkBVAdd', '-': 'mkSub / mkBVSub', '*': 'mkMul / mkBVMul', '/': 'mkDiv / mkBVSDiv', '%': 'mkMod / mkBVSRem', '<': 'mkLt / mkBVSLT', '>': 'mkGt / mkBVSGT', '<=': 'mkLe / mkBVSLE', '>=': 'mkGe / mkBVSGE', '&': 'mkAnd / mkBVAND', '|': 'mkOr / mkBVOR', '^': 'mkXor / mkBVXOR', '<<': 'mkBVSHL', '>>': 'mkBVASHR', '>>>': 'mkBVLSHR' }[op];
+    throw cerr('в Java нет перегрузки операторов: «' + op + '» нельзя применить к выражениям Z3. Используйте методы контекста: ctx.' + (m || 'mk…') + '(…)', e.line);
+  }
+  if (op === '==' || op === '!=') {
+    var eq;
+    if (nkind(a) && nkind(b)) eq = numBin('==', a, b);
+    else eq = a === b || (a === null && b === null);
+    if (typeof a === 'string' && typeof b === 'string' && a !== b) eq = false;
+    return op === '==' ? eq : !eq;
+  }
+  if (typeof a === 'boolean' && typeof b === 'boolean' && (op === '&' || op === '|' || op === '^')) return op === '&' ? a && b : op === '|' ? a || b : a !== b;
+  var r = numBin(op, a, b);
+  if (r === undefined) throw cerr('операция «' + op + '» не применима к ' + jtype(a) + ' и ' + jtype(b), e.line);
+  return r;
+};
+IP.needBool = function (v, op, e) {
+  if (typeof v === 'boolean') return;
+  if (isZ(v)) throw cerr('«' + op + '» работает с boolean Java, а не с выражениями Z3. Используйте ctx.' + (op === '&&' ? 'mkAnd' : 'mkOr') + '(…)', e.line);
+  throw cerr('«' + op + '» применим только к boolean', e.line);
+};
+IP.cast = function (t, v, e) {
+  if (t.dims) return v;
+  if (has(PRIM, t.name)) {
+    if (!nkind(v)) throw rerr('java.lang.ClassCastException', jtype(v) + ' нельзя привести к ' + t.name + (isZ(v) ? '. Чтобы получить число из модели: ((IntNum) m.eval(x, true)).getInt()' : ''));
+    return coerce(v, t);
+  }
+  var n = t.name.split('.').pop();
+  if ((n === 'IntNum' || n === 'BitVecNum' || n === 'RatNum') && isZ(v) && v.op !== 'const') throw rerr('java.lang.ClassCastException', 'выражение «' + C.toSmt(v) + '» — не число. Вычислите его в модели с подстановкой значений по умолчанию: m.eval(' + C.toSmt(v) + ', true)');
+  if (n === 'IntNum' && isZ(v) && v.sort.k !== 'Int') throw rerr('java.lang.ClassCastException', 'BitVecNum нельзя привести к IntNum');
+  if (n === 'BitVecNum' && isZ(v) && v.sort.k !== 'BV') throw rerr('java.lang.ClassCastException', 'IntNum нельзя привести к BitVecNum');
+  if (n === 'Integer' && nkind(v)) return toInt(v);
+  if (n === 'Long' && nkind(v)) return toLong(v);
+  return v;
+};
+
+/* ================= классы JDK ================= */
+var CLASSES = { Status: 1, Integer: 1, Long: 1, Math: 1, System: 1, String: 1, Arrays: 1, List: 1, Character: 1, Boolean: 1, Objects: 1, Collections: 1, Map: 1 };
+IP.getField = function (o, name, e) {
+  if (o && o.cls === '__class') {
+    switch (o.name + '.' + name) {
+      case 'Status.SATISFIABLE': case 'Status.UNSATISFIABLE': case 'Status.UNKNOWN': return STATUS[name];
+      case 'Integer.MAX_VALUE': return 2147483647; case 'Integer.MIN_VALUE': return -2147483648;
+      case 'Long.MAX_VALUE': return 9223372036854775807n; case 'Long.MIN_VALUE': return -9223372036854775808n;
+      case 'System.out': case 'System.err': return new JObj('PrintStream');
+    }
+    throw cerr('нет поля ' + o.name + '.' + name, e.line);
+  }
+  if (o instanceof JArr && name === 'length') return o.a.length;
+  if (o instanceof JObj && o.cls === 'Exception' && name === 'msg') return o.msg;
+  throw cerr('у ' + jtype(o) + ' нет поля «' + name + '»' + (o instanceof JArr ? '' : ' (возможно, это метод — нужны скобки ())'), e.line);
+};
+IP.newObj = function (e, sc) {
+  var self = this, args = e.args.map(function (a) { return self.eval(a, sc); }), n = e.type.name.split('.').pop();
+  switch (n) {
+    case 'Context': return new JObj('Context', { closed: false });
+    case 'ArrayList': case 'LinkedList': return new JList(args[0] instanceof JList ? args[0].a.slice() : []);
+    case 'HashMap': case 'TreeMap': case 'LinkedHashMap': return new JMap();
+    case 'HashSet': case 'TreeSet': return new JObj('Set', { a: [] });
+    case 'StringBuilder': return new JObj('StringBuilder', { s: args.length ? jstr(args[0]) : '' });
+    case 'RuntimeException': case 'IllegalStateException': case 'IllegalArgumentException': case 'Exception': case 'AssertionError': return new JObj('Exception', { cls: 'java.lang.' + n, msg: args.length ? jstr(args[0]) : '' });
+    case 'Solver': case 'Optimize': throw cerr('объекты Z3 создаются через контекст: ctx.mk' + n + '()', e.line);
+  }
+  throw cerr('класс ' + e.type.name + ' не поддерживается в этой игре', e.line);
+};
+function fmtJ(fmt, args) {
+  var k = 0;
+  return fmt.replace(/%([-0+ ,#]*)(\d+)?(?:\.(\d+))?([dsxXbcfn%])/g, function (m, flags, w, prec, t) {
+    if (t === 'n') return '\n'; if (t === '%') return '%';
+    var v = args[k++], s;
+    if (t === 'd') { if (isZ(v) && v.op === 'const') v = v.val; s = (typeof v === 'bigint' || typeof v === 'number') ? v.toString() : jstr(v); if (flags.indexOf(',') >= 0) s = s.replace(/\B(?=(\d{3})+(?!\d))/g, ','); }
+    else if (t === 'x' || t === 'X') { var bv = typeof v === 'number' ? BigInt(v >>> 0) : typeof v === 'bigint' ? BigInt.asUintN(64, v) : (isZ(v) && v.op === 'const' ? v.val : 0n); s = bv.toString(16); if (t === 'X') s = s.toUpperCase(); }
+    else if (t === 'b') s = String(!!v);
+    else if (t === 'c') s = v instanceof JChar ? String.fromCharCode(v.c) : String.fromCharCode(toInt(v));
+    else if (t === 'f') s = toD(v).toFixed(prec === undefined ? 6 : +prec);
+    else s = jstr(v);
+    if (w && s.length < +w) s = flags.indexOf('-') >= 0 ? s.padEnd(+w) : (flags.indexOf('0') >= 0 ? s.padStart(+w, '0') : s.padStart(+w));
+    return s;
+  });
+}
+IP.staticCall = function (cls, name, a, e) {
+  switch (cls + '.' + name) {
+    case 'Math.max': return nkind(a[0]) === 'long' || nkind(a[1]) === 'long' ? (toLong(a[0]) > toLong(a[1]) ? toLong(a[0]) : toLong(a[1])) : Math.max(toInt(a[0]), toInt(a[1]));
+    case 'Math.min': return nkind(a[0]) === 'long' || nkind(a[1]) === 'long' ? (toLong(a[0]) < toLong(a[1]) ? toLong(a[0]) : toLong(a[1])) : Math.min(toInt(a[0]), toInt(a[1]));
+    case 'Math.abs': if (nkind(a[0]) === 'long') { var L = toLong(a[0]); return L < 0n ? BigInt.asIntN(64, -L) : L; } return Math.abs(toInt(a[0])) | 0;
+    case 'Math.floorMod': { var x = toInt(a[0]), y = toInt(a[1]); return ((x % y) + y) % y; }
+    case 'Math.pow': return new JDouble(Math.pow(toD(a[0]), toD(a[1])));
+    case 'Integer.toHexString': return (toInt(a[0]) >>> 0).toString(16);
+    case 'Integer.toBinaryString': return (toInt(a[0]) >>> 0).toString(2);
+    case 'Integer.toString': return String(toInt(a[0]));
+    case 'Integer.rotateLeft': { var v = toInt(a[0]), n = toInt(a[1]) & 31; return ((v << n) | (v >>> (32 - n))) | 0; }
+    case 'Integer.rotateRight': { v = toInt(a[0]); n = toInt(a[1]) & 31; return ((v >>> n) | (v << (32 - n))) | 0; }
+    case 'Integer.parseInt': { var p = parseInt(a[0], a[1] ? toInt(a[1]) : 10); if (isNaN(p)) throw rerr('java.lang.NumberFormatException', 'For input string: "' + a[0] + '"'); return p | 0; }
+    case 'Integer.valueOf': return typeof a[0] === 'string' ? parseInt(a[0], 10) | 0 : toInt(a[0]);
+    case 'Integer.bitCount': { v = toInt(a[0]) >>> 0; var c = 0; while (v) { c += v & 1; v >>>= 1; } return c; }
+    case 'Integer.compareUnsigned': { var u1 = toInt(a[0]) >>> 0, u2 = toInt(a[1]) >>> 0; return u1 < u2 ? -1 : u1 > u2 ? 1 : 0; }
+    case 'Long.toHexString': return BigInt.asUintN(64, toLong(a[0])).toString(16);
+    case 'Long.parseLong': return BigInt(a[0]);
+    case 'String.valueOf': return jstr(a[0]);
+    case 'String.format': return fmtJ(jstr(a[0]), a.slice(1));
+    case 'String.join': return (a[1] instanceof JList || a[1] instanceof JArr ? a[1].a : a.slice(1)).map(jstr).join(jstr(a[0]));
+    case 'Arrays.toString': return a[0] === null ? 'null' : '[' + a[0].a.map(jstr).join(', ') + ']';
+    case 'Arrays.asList': case 'List.of': return new JList(a.length === 1 && a[0] instanceof JArr ? a[0].a.slice() : a.slice());
+    case 'Character.isLetter': return /[A-Za-zА-Яа-я]/.test(String.fromCharCode(toInt(a[0])));
+    case 'Character.isDigit': return /\d/.test(String.fromCharCode(toInt(a[0])));
+    case 'Boolean.toString': return String(a[0]);
+    case 'Objects.equals': return a[0] === a[1] || (isZ(a[0]) && isZ(a[1]) && C.structEq(a[0], a[1]));
+  }
+  throw cerr('метод ' + cls + '.' + name + ' не поддерживается в этой игре', e.line);
+};
+
+IP.call = function (e, sc) {
+  var self = this, args = e.args.map(function (a) { return self.eval(a, sc); });
+  this.line = e.line;
+  if (!e.o) {
+    if (Object.prototype.hasOwnProperty.call(this.methods, e.name)) return this.callUser(e.name, args);
+    throw cerr('метод «' + e.name + '» не найден. Методы Z3 вызываются у контекста: ctx.' + e.name + '(…)', e.line);
+  }
+  var o = this.eval(e.o, sc);
+  if (o && o.cls === '__class') {
+    if (o.name === 'Main' && Object.prototype.hasOwnProperty.call(this.methods, e.name)) return this.callUser(e.name, args);
+    return this.staticCall(o.name, e.name, args, e);
+  }
+  if (o === null || o === undefined) throw rerr('java.lang.NullPointerException', 'Cannot invoke "' + e.name + '()" because value is null' + (e.name === 'getInt' || e.name === 'toString' ? ' — возможно, m.getConstInterp(x) вернул null: переменной нет в модели. Используйте m.eval(x, true)' : ''));
+  try { return this.method(o, e.name, args, e); }
+  catch (ex) { if (ex && ex.z3) throw z3err(ex.message); throw ex; }
+};
+function methodErr(o, name, e) {
+  var t = jtype(o);
+  var low = name.toLowerCase(), list = (o instanceof JObj && has(API, o.cls)) ? Object.keys(API[o.cls]) : [];
+  var sugg = list.filter(function (k) { return k.toLowerCase() === low; })[0];
+  return cerr('у ' + t + ' нет метода ' + name + '()' + (sugg ? ' — может быть, ' + sugg + '()? (в Java важен регистр)' : ''), e.line);
+}
+IP.method = function (o, name, a, e) {
+  var self = this;
+  if (typeof o === 'string') return strMethod(o, name, a, e);
+  if (o instanceof JList) return listMethod(o, name, a, e);
+  if (o instanceof JMap) return mapMethod(o, name, a, e);
+  if (o instanceof JArr && name === 'clone') return new JArr(o.a.slice(), o.et);
+  if (isZ(o)) return exprMethod(o, name, a, e);
+  if (o instanceof JObj) {
+    var tbl = has(API, o.cls) ? API[o.cls] : null;
+    if (tbl && has(tbl, name)) return tbl[name].call(this, o, a, e);
+    if (name === 'toString') return jstr(o);
+    if (name === 'equals') return o === a[0];
+    if (name === 'getMessage' && o.cls === 'Exception') return o.msg;
+  }
+  if (name === 'toString') return jstr(o);
+  if (name === 'equals') return o === a[0];
+  if (name === 'hashCode' && typeof o === 'string') return hashStr(o);
+  throw methodErr(o, name, e);
+};
+function strMethod(s, name, a, e) {
+  switch (name) {
+    case 'length': return s.length;
+    case 'charAt': { var i = toInt(a[0]); if (i < 0 || i >= s.length) throw rerr('java.lang.StringIndexOutOfBoundsException', 'index ' + i + ', length ' + s.length); return new JChar(s.charCodeAt(i)); }
+    case 'toCharArray': return new JArr(s.split('').map(function (c) { return new JChar(c.charCodeAt(0)); }), 'char');
+    case 'hashCode': return hashStr(s);
+    case 'equals': return s === a[0];
+    case 'isEmpty': return s.length === 0;
+    case 'substring': return a.length > 1 ? s.substring(toInt(a[0]), toInt(a[1])) : s.substring(toInt(a[0]));
+    case 'toUpperCase': return s.toUpperCase(); case 'toLowerCase': return s.toLowerCase();
+    case 'contains': return s.indexOf(jstr(a[0])) >= 0;
+    case 'startsWith': return s.indexOf(jstr(a[0])) === 0;
+    case 'indexOf': return s.indexOf(a[0] instanceof JChar ? String.fromCharCode(a[0].c) : jstr(a[0]));
+    case 'repeat': return s.repeat(toInt(a[0]));
+    case 'trim': case 'strip': return s.trim();
+    case 'split': return new JArr(s.split(new RegExp(jstr(a[0]))), 'String');
+    case 'formatted': return fmtJ(s, a);
+    case 'toString': return s;
+    case 'chars': throw cerr('стримы не поддерживаются — используйте toCharArray() и цикл', e.line);
+  }
+  throw cerr('у String нет метода ' + name + '() (или он не поддерживается)', e.line);
+}
+function listMethod(l, name, a, e) {
+  switch (name) {
+    case 'add': if (a.length === 2) l.a.splice(toInt(a[0]), 0, a[1]); else l.a.push(a[0]); return true;
+    case 'addAll': l.a.push.apply(l.a, a[0].a); return true;
+    case 'get': { var i = toInt(a[0]); if (i < 0 || i >= l.a.length) throw rerr('java.lang.IndexOutOfBoundsException', 'Index ' + i + ' out of bounds for length ' + l.a.length); return l.a[i]; }
+    case 'set': { i = toInt(a[0]); var old = l.a[i]; l.a[i] = a[1]; return old; }
+    case 'size': return l.a.length;
+    case 'isEmpty': return l.a.length === 0;
+    case 'clear': l.a.length = 0; return null;
+    case 'remove': return l.a.splice(toInt(a[0]), 1)[0];
+    case 'contains': return l.a.some(function (x) { return x === a[0] || (isZ(x) && isZ(a[0]) && C.structEq(x, a[0])); });
+    case 'toArray': return new JArr(l.a.slice(), a[0] instanceof JArr ? a[0].et : 'Object');
+    case 'toString': return jstr(l);
+    case 'stream': case 'forEach': throw cerr('стримы и лямбды не поддерживаются — используйте обычный цикл for', e.line);
+  }
+  throw cerr('у List нет метода ' + name + '() (или он не поддерживается)', e.line);
+}
+function mkey(k) { return isZ(k) ? 'z' + C.toSmt(k) : typeof k + ':' + jstr(k); }
+function mapMethod(m, name, a, e) {
+  switch (name) {
+    case 'put': { var old = m.m.get(mkey(a[0])); m.m.set(mkey(a[0]), [a[0], a[1]]); return old ? old[1] : null; }
+    case 'get': { var v = m.m.get(mkey(a[0])); return v ? v[1] : null; }
+    case 'getOrDefault': { v = m.m.get(mkey(a[0])); return v ? v[1] : a[1]; }
+    case 'containsKey': return m.m.has(mkey(a[0]));
+    case 'size': return m.m.size;
+    case 'keySet': { var ks = []; m.m.forEach(function (x) { ks.push(x[0]); }); return new JObj('Set', { a: ks }); }
+    case 'values': { var vs = []; m.m.forEach(function (x) { vs.push(x[1]); }); return new JList(vs); }
+  }
+  throw cerr('у Map нет метода ' + name + '() (или он не поддерживается)', e.line);
+}
+function exprMethod(x, name, a, e) {
+  switch (name) {
+    case 'toString': return jstr(x);
+    case 'getSExpr': return C.toSmt(x);
+    case 'simplify': return C.substFold(x, null);
+    case 'isTrue': return x.op === 'const' && x.val === true;
+    case 'isFalse': return x.op === 'const' && x.val === false;
+    case 'isConst': return x.op === 'var';
+    case 'isIntNum': return x.op === 'const' && x.sort.k === 'Int';
+    case 'isBVNumeral': return x.op === 'const' && x.sort.k === 'BV';
+    case 'isNumeral': return x.op === 'const' && x.sort.k !== 'Bool';
+    case 'getSort': return new JObj('Sort', { s: x.sort });
+    case 'getSortSize': if (x.sort.k !== 'BV') break; return x.sort.w;
+    case 'equals': return isZ(a[0]) && C.structEq(x, a[0]);
+    case 'hashCode': return hashStr(C.toSmt(x));
+    case 'getBoolValue': if (x.op === 'const' && x.sort.k === 'Bool') return new JObj('Status', { name: x.val ? 'Z3_L_TRUE' : 'Z3_L_FALSE' }); break;
+    case 'getInt': case 'getInt64': case 'getLong': case 'getBigInteger': {
+      if (x.op !== 'const' || x.sort.k === 'Bool') throw rerr('java.lang.ClassCastException', 'выражение «' + C.toSmt(x) + '» — не число. Сначала вычислите его в модели: m.eval(x, true)');
+      var v = x.val;
+      if (name === 'getInt') {
+        if (x.sort.k === 'BV' && v > 2147483647n) throw z3err('Numeral is not an int — значение ' + v + ' не помещается в int как беззнаковое. Используйте (int) num.getLong()');
+        if (v > 2147483647n || v < -2147483648n) throw z3err('Numeral is not an int');
+        return Number(v);
+      }
+      return v;
+    }
+    case 'getNumArgs': return x.args.length;
+    case 'getArgs': return new JArr(x.args.slice(), 'Expr');
+    case 'getFuncDecl': if (x.op === 'var') return new JObj('FuncDecl', { kind: 'const', name: x.name, range: x.sort, e: x }); break;
+  }
+  throw cerr('у ' + jtype(x) + ' нет метода ' + name + '() (или он не поддерживается)', e.line);
+}
+
+/* ================= Z3 Java API ================= */
+function Ez(v, what) {
+  if (isZ(v)) return v;
+  throw z3err((what || 'аргумент') + ': ожидалось выражение Z3, а передано ' + jtype(v) + (typeof v === 'number' || typeof v === 'bigint' ? ' — числа нужно обернуть: ctx.mkInt(' + v + ') или ctx.mkBV(' + v + ', 32)' : typeof v === 'boolean' ? ' — используйте ctx.mkBool(' + v + ')' : ''));
+}
+function flat(a) { var o = []; a.forEach(function (x) { if (x instanceof JArr || x instanceof JList) o.push.apply(o, x.a); else o.push(x); }); return o; }
+function B(v, f) { var x = Ez(v, f); if (x.sort.k !== 'Bool') throw z3err(f + ': ожидалось логическое выражение (BoolExpr), а передано ' + C.sortName(x.sort) + ' «' + C.toSmt(x) + '»'); return x; }
+function mk(op, args, p) { return C.mk(op, args, p); }
+function ctxOk(o) { if (o.closed) throw z3err('контекст уже закрыт (close())'); }
+function mkSorts(x) { return x instanceof JArr ? x.a.map(function (s) { return s.s; }) : [x.s]; }
+function bv1(name, op) { return function (c, a) { ctxOk(c); return mk(op, [Ez(a[0], name), Ez(a[1], name)]); }; }
+function nar(name, op, k) { return function (c, a) { ctxOk(c); var xs = flat(a).map(function (x) { return Ez(x, name); }); if (!xs.length) return k === 'Bool' ? C.mkBool(op === 'and') : C.mkInt(op === 'mul' ? 1 : 0); if (xs.length === 1) return xs[0]; return mk(op, xs); }; }
+function wide(x, n, signed) { return mk(signed ? 'sext' : 'zext', [x], { n: n }); }
+function minS(w) { return C.mkBV(1n << BigInt(w - 1), w); }
+function maxS(w) { return C.mkBV((1n << BigInt(w - 1)) - 1n, w); }
+var API = {};
+API.Context = {
+  mkIntConst: function (c, a) { ctxOk(c); return C.mkVar(jstr(a[0]), C.INT); },
+  mkBoolConst: function (c, a) { ctxOk(c); return C.mkVar(jstr(a[0]), C.BOOL); },
+  mkBVConst: function (c, a) { ctxOk(c); return C.mkVar(jstr(a[0]), C.BVS(toInt(a[1]))); },
+  mkConst: function (c, a) { ctxOk(c); if (!(a[1] instanceof JObj && a[1].cls === 'Sort')) throw z3err('mkConst(name, sort): второй аргумент — сорт, например ctx.getIntSort()'); return C.mkVar(jstr(a[0]), a[1].s); },
+  mkFreshConst: function (c, a) { c.fresh = (c.fresh || 0) + 1; return C.mkVar(jstr(a[0]) + '!' + c.fresh, a[1].s); },
+  mkInt: function (c, a) { ctxOk(c); var v = a[0]; return C.mkInt(typeof v === 'string' ? BigInt(v) : toLong(v)); },
+  mkBV: function (c, a) { ctxOk(c); var v = a[0]; return C.mkBV(typeof v === 'string' ? BigInt(v) : toLong(v), toInt(a[1])); },
+  mkBool: function (c, a) { return C.mkBool(!!a[0]); },
+  mkTrue: function () { return C.mkBool(true); }, mkFalse: function () { return C.mkBool(false); },
+  mkIntSort: function () { return new JObj('Sort', { s: C.INT }); }, getIntSort: function () { return new JObj('Sort', { s: C.INT }); },
+  mkBoolSort: function () { return new JObj('Sort', { s: C.BOOL }); }, getBoolSort: function () { return new JObj('Sort', { s: C.BOOL }); },
+  mkBitVecSort: function (c, a) { return new JObj('Sort', { s: C.BVS(toInt(a[0])) }); },
+  mkFuncDecl: function (c, a) {
+    var d = new JObj('FuncDecl', { kind: 'func', name: jstr(a[0]), domain: mkSorts(a[1]), range: a[2].s });
+    d.py = 'decl';
+    return d;
+  },
+  mkApp: function (c, a) { return applyFunc(a[0], flat(a.slice(1))); },
+  mkAdd: nar('mkAdd', 'add'), mkMul: nar('mkMul', 'mul'),
+  mkSub: function (c, a) { var xs = flat(a).map(function (x) { return Ez(x, 'mkSub'); }); return xs.reduce(function (s, y) { return mk('sub', [s, y]); }); },
+  mkDiv: bv1('mkDiv', 'div'), mkMod: bv1('mkMod', 'mod'),
+  mkUnaryMinus: function (c, a) { return mk('neg', [Ez(a[0], 'mkUnaryMinus')]); },
+  mkPower: function (c, a) { var p = Ez(a[1], 'mkPower'); if (p.op !== 'const') throw z3err('в этой игре степень должна быть константой'); return mk('pow', [Ez(a[0])], { k: Number(p.val) }); },
+  mkEq: function (c, a) { return mk('eq', [Ez(a[0], 'mkEq'), Ez(a[1], 'mkEq')]); },
+  mkDistinct: function (c, a) { var xs = flat(a).map(function (x) { return Ez(x, 'mkDistinct'); }); return xs.length < 2 ? C.mkBool(true) : mk('distinct', xs); },
+  mkLt: bv1('mkLt', 'lt'), mkLe: bv1('mkLe', 'le'), mkGt: bv1('mkGt', 'gt'), mkGe: bv1('mkGe', 'ge'),
+  mkNot: function (c, a) { return mk('not', [B(a[0], 'mkNot')]); },
+  mkAnd: function (c, a) { var xs = flat(a).map(function (x) { return B(x, 'mkAnd'); }); return xs.length ? mk('and', xs) : C.mkBool(true); },
+  mkOr: function (c, a) { var xs = flat(a).map(function (x) { return B(x, 'mkOr'); }); return xs.length ? mk('or', xs) : C.mkBool(false); },
+  mkImplies: function (c, a) { return mk('implies', [B(a[0], 'mkImplies'), B(a[1], 'mkImplies')]); },
+  mkXor: function (c, a) { return mk('xor', [B(a[0], 'mkXor'), B(a[1], 'mkXor')]); },
+  mkIff: function (c, a) { return mk('eq', [B(a[0], 'mkIff'), B(a[1], 'mkIff')]); },
+  mkITE: function (c, a) { return mk('ite', [B(a[0], 'mkITE'), Ez(a[1], 'mkITE'), Ez(a[2], 'mkITE')]); },
+  mkAtMost: function (c, a) { var xs = flat([a[0]]).map(function (x) { return mk('ite', [B(x, 'mkAtMost'), C.mkInt(1), C.mkInt(0)]); }); return mk('le', [mk('add', xs.concat([C.mkInt(0)])), C.mkInt(toInt(a[1]))]); },
+  mkAtLeast: function (c, a) { var xs = flat([a[0]]).map(function (x) { return mk('ite', [B(x, 'mkAtLeast'), C.mkInt(1), C.mkInt(0)]); }); return mk('ge', [mk('add', xs.concat([C.mkInt(0)])), C.mkInt(toInt(a[1]))]); },
+  mkBVAdd: bv1('mkBVAdd', 'bvadd'), mkBVSub: bv1('mkBVSub', 'bvsub'), mkBVMul: bv1('mkBVMul', 'bvmul'),
+  mkBVSDiv: bv1('mkBVSDiv', 'bvsdiv'), mkBVUDiv: bv1('mkBVUDiv', 'bvudiv'), mkBVSRem: bv1('mkBVSRem', 'bvsrem'), mkBVURem: bv1('mkBVURem', 'bvurem'), mkBVSMod: bv1('mkBVSMod', 'bvsmod'),
+  mkBVAND: bv1('mkBVAND', 'bvand'), mkBVOR: bv1('mkBVOR', 'bvor'), mkBVXOR: bv1('mkBVXOR', 'bvxor'),
+  mkBVNot: function (c, a) { return mk('bvnot', [Ez(a[0], 'mkBVNot')]); }, mkBVNeg: function (c, a) { return mk('bvneg', [Ez(a[0], 'mkBVNeg')]); },
+  mkBVSHL: bv1('mkBVSHL', 'bvshl'), mkBVLSHR: bv1('mkBVLSHR', 'bvlshr'), mkBVASHR: bv1('mkBVASHR', 'bvashr'),
+  mkBVSLT: bv1('mkBVSLT', 'bvslt'), mkBVSLE: bv1('mkBVSLE', 'bvsle'), mkBVSGT: bv1('mkBVSGT', 'bvsgt'), mkBVSGE: bv1('mkBVSGE', 'bvsge'),
+  mkBVULT: bv1('mkBVULT', 'bvult'), mkBVULE: bv1('mkBVULE', 'bvule'), mkBVUGT: bv1('mkBVUGT', 'bvugt'), mkBVUGE: bv1('mkBVUGE', 'bvuge'),
+  mkConcat: bv1('mkConcat', 'concat'),
+  mkExtract: function (c, a) { return mk('extract', [Ez(a[2], 'mkExtract')], { hi: toInt(a[0]), lo: toInt(a[1]) }); },
+  mkZeroExt: function (c, a) { return mk('zext', [Ez(a[1], 'mkZeroExt')], { n: toInt(a[0]) }); },
+  mkSignExt: function (c, a) { return mk('sext', [Ez(a[1], 'mkSignExt')], { n: toInt(a[0]) }); },
+  mkBVRotateLeft: function (c, a) { if (!nkind(a[0])) throw z3err('в этой игре mkBVRotateLeft(int n, expr) — сдвиг должен быть числом Java'); return mk('rotl', [Ez(a[1])], { n: toInt(a[0]) }); },
+  mkBVRotateRight: function (c, a) { if (!nkind(a[0])) throw z3err('mkBVRotateRight(int n, expr) — сдвиг должен быть числом Java'); return mk('rotr', [Ez(a[1])], { n: toInt(a[0]) }); },
+  mkBV2Int: function (c, a) {
+    var x = Ez(a[0], 'mkBV2Int'), u = mk('bv2int', [x]);
+    if (!a[1]) return u;
+    var w = x.sort.w, msb = mk('eq', [mk('extract', [x], { hi: w - 1, lo: w - 1 }), C.mkBV(1, 1)]);
+    return mk('ite', [msb, mk('sub', [u, C.mkInt(1n << BigInt(w))]), u]);
+  },
+  mkInt2BV: function (c, a) { return mk('int2bv', [Ez(a[1], 'mkInt2BV')], { w: toInt(a[0]) }); },
+  mkBVAddNoOverflow: function (c, a) {
+    var x = Ez(a[0]), y = Ez(a[1]), w = x.sort.w;
+    if (a[2]) return mk('bvsle', [mk('bvadd', [wide(x, 1, true), wide(y, 1, true)]), wide(maxS(w), 1, true)]);
+    return mk('eq', [mk('extract', [mk('bvadd', [wide(x, 1, false), wide(y, 1, false)])], { hi: w, lo: w }), C.mkBV(0, 1)]);
+  },
+  mkBVAddNoUnderflow: function (c, a) { var x = Ez(a[0]), y = Ez(a[1]), w = x.sort.w; return mk('bvsge', [mk('bvadd', [wide(x, 1, true), wide(y, 1, true)]), wide(minS(w), 1, true)]); },
+  mkBVSubNoOverflow: function (c, a) { var x = Ez(a[0]), y = Ez(a[1]), w = x.sort.w; return mk('bvsle', [mk('bvsub', [wide(x, 1, true), wide(y, 1, true)]), wide(maxS(w), 1, true)]); },
+  mkBVSubNoUnderflow: function (c, a) {
+    var x = Ez(a[0]), y = Ez(a[1]), w = x.sort.w;
+    if (a[2]) return mk('bvsge', [mk('bvsub', [wide(x, 1, true), wide(y, 1, true)]), wide(minS(w), 1, true)]);
+    return mk('bvule', [y, x]);
+  },
+  mkBVMulNoOverflow: function (c, a) {
+    var x = Ez(a[0]), y = Ez(a[1]), w = x.sort.w;
+    if (a[2]) return mk('bvsle', [mk('bvmul', [wide(x, w, true), wide(y, w, true)]), wide(maxS(w), w, true)]);
+    return mk('eq', [mk('extract', [mk('bvmul', [wide(x, w, false), wide(y, w, false)])], { hi: 2 * w - 1, lo: w }), C.mkBV(0, w)]);
+  },
+  mkBVMulNoUnderflow: function (c, a) { var x = Ez(a[0]), y = Ez(a[1]), w = x.sort.w; return mk('bvsge', [mk('bvmul', [wide(x, w, true), wide(y, w, true)]), wide(minS(w), w, true)]); },
+  mkBVNegNoOverflow: function (c, a) { var x = Ez(a[0]); return mk('distinct', [x, minS(x.sort.w)]); },
+  mkBVSDivNoOverflow: function (c, a) { var x = Ez(a[0]), y = Ez(a[1]), w = x.sort.w; return mk('not', [mk('and', [mk('eq', [x, minS(w)]), mk('eq', [y, C.mkBV(-1, w)])])]); },
+  mkSolver: function (c) { ctxOk(c); return new JObj('Solver', { asserts: [], scopes: [], last: null }); },
+  mkSimpleSolver: function (c) { ctxOk(c); return new JObj('Solver', { asserts: [], scopes: [], last: null }); },
+  mkOptimize: function (c) { ctxOk(c); return new JObj('Optimize', { asserts: [], scopes: [], objs: [], last: null, lastVals: null }); },
+  mkParams: function () { return new JObj('Params', {}); },
+  mkSymbol: function (c, a) { return new JObj('Symbol', { name: jstr(a[0]) }); },
+  close: function (c) { c.closed = true; return null; }
+};
+API.Params = { add: function () { return null; } };
+function applyFunc(d, args) {
+  if (!(d instanceof JObj && d.cls === 'FuncDecl' && d.kind === 'func')) throw z3err('ожидалась функция (FuncDecl)');
+  if (args.length !== d.domain.length) throw z3err('функция ' + d.name + ' ожидает ' + d.domain.length + ' аргумент(ов)');
+  var xs = args.map(function (x, i) { var ex = Ez(x); if (ex.sort !== d.domain[i]) throw z3err('аргумент ' + (i + 1) + ' функции ' + d.name + ': ожидается ' + C.sortName(d.domain[i])); return ex; });
+  return new C.Expr('app', d.range, xs, { fname: d.name, decl: d });
+}
+API.FuncDecl = {
+  apply: function (d, a) { return applyFunc(d, flat(a)); },
+  getName: function (d) { return new JObj('Symbol', { name: d.name }); },
+  getArity: function (d) { return d.domain ? d.domain.length : 0; },
+  getRange: function (d) { return new JObj('Sort', { s: d.range }); }
+};
+API.Symbol = { toString: function (s) { return s.name; } };
+API.Sort = { getBVSize: function (s) { return s.s.w; } };
+function doCheck(ip, s, extra) {
+  if (++ip.checks > ip.maxChecks) throw rerr('RuntimeError', 'слишком много вызовов check() (больше ' + ip.maxChecks + ')');
+  var as = s.asserts.concat(extra || []), r;
+  try {
+    if (s.cls === 'Optimize' && s.objs.length) r = C.optimize(as, s.objs, { timeMs: ip.opts.timeMs || 8000 });
+    else r = C.check(as, { timeMs: ip.opts.timeMs || 8000 });
+  } catch (ex) { if (ex.z3) throw z3err(ex.message); throw ex; }
+  s.last = r; s.lastVals = r.values || null;
+  ip.ctx.checks.push({ via: s.cls === 'Optimize' ? 'optimize' : 'check', result: r.result, model: r.model || null, asserts: as, objs: s.objs ? s.objs.slice() : [], values: r.values || null, extra: extra || [] });
+  return statusOf(r.result);
+}
+function solverApi(isOpt) {
+  var T = {
+    add: function (s, a) { flat(a).forEach(function (x) { s.asserts.push(B(x, 'add')); }); return null; },
+    check: function (s, a) { return doCheck(this, s, flat(a).map(function (x) { return B(x, 'check'); })); },
+    getModel: function (s) {
+      if (!s.last) throw z3err('модели нет: сначала вызовите check()');
+      if (s.last.result !== 'sat') throw z3err('модели нет: check() вернул ' + statusOf(s.last.result).name + (s.last.result === 'unsat' ? ' — решений не существует' : ''));
+      return new JObj('Model', { map: s.last.model });
+    },
+    push: function (s) { s.scopes.push([s.asserts.length, s.objs ? s.objs.length : 0]); return null; },
+    pop: function (s, a) { var n = a.length ? toInt(a[0]) : 1; for (var i = 0; i < n; i++) { var sc = s.scopes.pop(); if (!sc) throw z3err('pop() без push()'); s.asserts.length = sc[0]; if (s.objs) s.objs.length = sc[1]; } return null; },
+    reset: function (s) { s.asserts.length = 0; s.scopes.length = 0; if (s.objs) s.objs.length = 0; s.last = null; return null; },
+    getAssertions: function (s) { return new JArr(s.asserts.slice(), 'BoolExpr'); },
+    getNumAssertions: function (s) { return s.asserts.length; },
+    getNumScopes: function (s) { return s.scopes.length; },
+    getReasonUnknown: function (s) { return s.last && s.last.result === 'unknown' ? 'timeout' : ''; },
+    setParameters: function () { return null; },
+    toString: function (s) { return C.solverSexpr(s.asserts); },
+    getUnsatCore: function () { throw z3err('getUnsatCore не поддерживается в этой игре'); }
+  };
+  if (isOpt) {
+    T.MkMinimize = function (s, a) { var e = Ez(a[0], 'MkMinimize'); s.objs.push({ expr: e, max: false }); return new JObj('Handle', { opt: s, idx: s.objs.length - 1, e: e }); };
+    T.MkMaximize = function (s, a) { var e = Ez(a[0], 'MkMaximize'); s.objs.push({ expr: e, max: true }); return new JObj('Handle', { opt: s, idx: s.objs.length - 1, e: e }); };
+    T.Add = T.add; T.Check = T.check; T.Push = T.push; T.Pop = T.pop;
+    delete T.add; delete T.check; delete T.push; delete T.pop;
+  }
+  return T;
+}
+API.Solver = solverApi(false);
+API.Optimize = solverApi(true);
+API.Handle = {
+  getValue: function (h) { if (!h.opt.lastVals) throw z3err('сначала вызовите Check()'); return C.constOf(h.opt.lastVals[h.idx], h.e.sort); },
+  getLower: function (h) { return API.Handle.getValue(h); }, getUpper: function (h) { return API.Handle.getValue(h); }
+};
+API.Model = {
+  eval: function (m, a) {
+    var e = Ez(a[0], 'eval'), complete = !!a[1];
+    try { return C.constOf(C.evalE(e, m.map, complete), e.sort); }
+    catch (ex) { if (ex instanceof C.MissingVar) return C.substFold(e, m.map); throw ex; }
+  },
+  getConstInterp: function (m, a) {
+    var x = a[0];
+    if (x instanceof JObj && x.cls === 'FuncDecl') x = x.e;
+    var e = Ez(x, 'getConstInterp');
+    if (e.op !== 'var') throw z3err('getConstInterp принимает константу (переменную), а не выражение — для выражений используйте eval');
+    var v = m.map.get(C.varKey(e));
+    return v ? C.constOf(v.value, v.sort) : null;
+  },
+  getConstDecls: function (m) { var o = []; m.map.forEach(function (v, k) { if (k.indexOf('fn:') !== 0) o.push(new JObj('FuncDecl', { kind: 'const', name: v.name, range: v.sort, e: v.e })); }); return new JArr(o, 'FuncDecl'); },
+  getFuncDecls: function (m) { var o = []; m.map.forEach(function (v, k) { if (k.indexOf('fn:') === 0) o.push(v.decl); }); return new JArr(o, 'FuncDecl'); },
+  getNumConsts: function (m) { var n = 0; m.map.forEach(function (v, k) { if (k.indexOf('fn:') !== 0) n++; }); return n; },
+  getFuncInterp: function (m, a) { var f = m.map.get('fn:' + a[0].name); return f ? new JObj('FuncInterp', { f: f, decl: a[0] }) : null; },
+  toString: function (m) { return modelStr(m.map); }
+};
+API.Model.evaluate = API.Model.eval;
+API.PrintStream = {
+  println: function (p, a) { this.write((a.length ? jstr(a[0]) : '') + '\n'); return null; },
+  print: function (p, a) { this.write(jstr(a[0])); return null; },
+  printf: function (p, a) { this.write(fmtJ(jstr(a[0]), a.slice(1))); return null; }
+};
+API.Set = { size: function (s) { return s.a.length; }, contains: function (s, a) { return s.a.indexOf(a[0]) >= 0; }, add: function (s, a) { if (s.a.indexOf(a[0]) < 0) { s.a.push(a[0]); return true; } return false; } };
+API.StringBuilder = { append: function (sb, a) { sb.s += jstr(a[0]); return sb; }, toString: function (sb) { return sb.s; }, length: function (sb) { return sb.s.length; } };
+API.Status = { toString: function (s) { return s.name; }, name: function (s) { return s.name; } };
+
+/* ================= запуск ================= */
+function run(code, opts) {
+  var ip = new Interp(opts), error = null;
+  try { ip.run(code); }
+  catch (e) {
+    if (e instanceof JErr) { if (!e.line) e.line = ip.line; error = e; }
+    else if (e instanceof BreakS || e instanceof ContinueS) error = cerr('break/continue вне цикла', ip.line);
+    else if (e instanceof ReturnS) error = null;
+    else if (e && e.z3) error = new JErr('com.microsoft.z3.Z3Exception', e.message, ip.line);
+    else if (e instanceof RangeError) error = new JErr('java.lang.StackOverflowError', 'слишком глубокая рекурсия', ip.line);
+    else { error = new JErr('InternalError', String(e && e.message || e), ip.line); if (typeof console !== 'undefined') console.error(e); }
+  }
+  if (ip.partial) ip.out.push(ip.partial);
+  return { out: ip.out, error: error, ctx: ip.ctx };
+}
+return { run: run, lex: lex };
+})();
+if (typeof module !== 'undefined') module.exports = JAVA;
+
 /* ===== Запуск программ и проверка решений уровней ===== */
 var RUNNER = (function () {
 'use strict';
 var C = (typeof Z3C !== 'undefined') ? Z3C : require('./core.js');
 var Py = (typeof PY !== 'undefined') ? PY : require('./py.js');
 var Smt = (typeof SMT !== 'undefined') ? SMT : require('./smt.js');
+var Jv = (typeof JAVA !== 'undefined') ? JAVA : require('./java.js');
 
 var refCache = {};
 function refExprs(code) {
@@ -2980,7 +4140,7 @@ function make(r, src) {
   h.ok = function () { return { ok: true }; };
   h.base = function () {
     if (r.error) return h.fail('Программа завершилась с ошибкой — сначала исправьте её (сообщение в консоли).');
-    if (!ctx.checks.length) return h.fail('Решатель ни разу не запускался. Вызовите solve(...), prove(...) или s.check().');
+    if (!ctx.checks.length) return h.fail('Решатель ни разу не запускался. Вызовите s.check()' + (src && /class\s+Main|ctx\.mk/.test(src) ? '' : ' (или solve(...), prove(...))') + '.');
     return null;
   };
   h.lastSat = function () { for (var i = ctx.checks.length - 1; i >= 0; i--) if (ctx.checks[i].result === 'sat' && ctx.checks[i].via !== 'prove') return ctx.checks[i]; return null; };
@@ -3045,6 +4205,32 @@ function make(r, src) {
     }
     return null;
   };
+  function conj(xs) { return xs.length === 0 ? C.mkBool(true) : xs.length === 1 ? xs[0] : C.mk('and', xs); }
+  function equivF(a, b) { try { return C.check([C.mk('xor', [a, b])], { timeMs: 4000 }).result === 'unsat'; } catch (e) { return false; } }
+  h.equivF = equivF;
+  /* найти проверку с данным результатом, чьи утверждения эквивалентны эталону (E — конъюнкция) */
+  h.findCheck = function (result, refCode) {
+    var E = conj(refExprs(refCode));
+    for (var i = ctx.checks.length - 1; i >= 0; i--) {
+      var c = ctx.checks[i];
+      if (c.result === result && equivF(conj(c.asserts), E)) return c;
+    }
+    return null;
+  };
+  /* «доказано» в стиле Java: check() == UNSATISFIABLE для Not(утверждение) */
+  h.refuted = function (refCode, want) {
+    var b = h.base(); if (b) return b;
+    want = want || 'unsat';
+    var E = refExprs(refCode), claim = conj(E), neg = C.mk('not', [claim]);
+    for (var i = ctx.checks.length - 1; i >= 0; i--) {
+      var c = ctx.checks[i];
+      if (c.result === want && equivF(conj(c.asserts), neg)) return null;
+    }
+    var near = ctx.checks.some(function (c) { return equivF(conj(c.asserts), neg); });
+    if (near) return h.fail(want === 'unsat' ? 'Проверка составлена верно, но вернула не UNSATISFIABLE.' : 'Проверка составлена верно, но контрпример не найден.');
+    if (ctx.checks.some(function (c) { return equivF(conj(c.asserts), claim); })) return h.fail('Вы проверили выполнимость самого утверждения. Чтобы доказать, что оно верно всегда, добавьте в решатель его отрицание: s.add(ctx.mkNot(claim)) — и ожидайте UNSATISFIABLE.');
+    return h.fail('Не найдено проверки отрицания нужного утверждения. Решатель должен содержать ровно одно: ctx.mkNot(утверждение). Сверьте формулировку и имена переменных.');
+  };
   h.usedOptimize = function () { return ctx.checks.some(function (c) { return c.via === 'optimize' && c.objs && c.objs.length; }) || ctx.checks.some(function (c) { return c.via === 'smt' && c.objs && c.objs.length; }); };
   h.val = function (name, rec) { rec = rec || h.lastSat(); if (!rec) return undefined; var found; rec.model.forEach(function (v, k) { if (v.name === name && k.indexOf('fn:') !== 0) found = v.value; }); return found; };
   h.evalIn = function (code, rec) { rec = rec || h.lastSat(); var E = refExprs(code); return E.map(function (e) { return C.evalE(e, rec.model, true); }); };
@@ -3053,7 +4239,7 @@ function make(r, src) {
 
 function exec(req, levels) {
   var t0 = Date.now(), r;
-  try { r = req.mode === 'smt' ? Smt.run(req.code) : Py.run(req.code); }
+  try { r = req.mode === 'smt' ? Smt.run(req.code) : req.mode === 'java' ? Jv.run(req.code) : Py.run(req.code); }
   catch (e) { return { out: [], error: 'Внутренняя ошибка: ' + (e && e.message || e), verdict: null, ms: Date.now() - t0 }; }
   var verdict = null;
   if (req.levelId && levels) {
@@ -3963,6 +5149,358 @@ def present(guess):                # сколько цифр догадки ес
 })();
 if (typeof module !== 'undefined') module.exports = { LEVELS: LEVELS, CHAPTERS: CHAPTERS };
 
+/* ===== Глава «Z3 из Java» ===== */
+(function () {
+'use strict';
+function s32(v) { return Number(BigInt.asIntN(32, BigInt(v))); }
+function jhash(s) { var h = 0; for (var i = 0; i < s.length; i++) h = (Math.imul(31, h) + s.charCodeAt(i)) | 0; return h; }
+function classify(a, b) { if (a > Math.imul(b, 2)) { if (a % 3 === 0) return 'A'; return 'B'; } if (((a + b) | 0) === 100) return 'C'; return 'D'; }
+function eligOld(age, member, total) { if (member) { if (total >= 1000) return true; return age >= 65; } return total >= 5000 || (age >= 65 && total >= 1000); }
+function eligNew(age, member, total) { return total >= 5000 || (age >= 65 && (member || total >= 100)) || (member && total >= 1000); }
+
+var HEAD = 'import com.microsoft.z3.*;\nimport java.util.*;\n\npublic class Main {\n';
+function cls(body, helpers) {
+  return HEAD + (helpers ? helpers + '\n' : '') + '    public static void main(String[] args) {\n        try (Context ctx = new Context()) {\n' +
+    body.split('\n').map(function (l) { return l ? '            ' + l : ''; }).join('\n') + '\n        }\n    }\n}\n';
+}
+
+var J = [
+{
+  id: 'q-java', ch: 8, type: 'quiz', title: 'Z3 в мире Java',
+  story: 'Бюро открывает Java-отдел: оракула встраивают прямо в бэкенд-сервисы — для проверки конфигураций, генерации тестов и поиска багов. Сначала — как устроен Java API.',
+  theory: `
+<p>У Z3 есть официальный Java API — пакет <code>com.microsoft.z3</code>. Jar и нативная библиотека (<code>libz3java</code>) входят в релизы Z3 на GitHub. Есть и сторонние сборки в Maven, например <code>tools.aqua:z3-turnkey</code>, где нативные библиотеки уже упакованы.</p>
+<p>Главное отличие от Python — <b>в Java нет перегрузки операторов</b>. Всё, что в Z3Py пишется <code>x + y &gt; 3</code>, в Java создаётся через методы контекста:</p>
+<pre><code>try (Context ctx = new Context()) {               // Context — AutoCloseable
+    IntExpr x = ctx.mkIntConst("x");
+    IntExpr y = ctx.mkIntConst("y");
+    Solver s = ctx.mkSolver();
+    s.add(ctx.mkGt(ctx.mkAdd(x, y), ctx.mkInt(3)));   // x + y &gt; 3
+    if (s.check() == Status.SATISFIABLE) {
+        Model m = s.getModel();
+        System.out.println(m.eval(x, true));          // значение x
+    }
+}</code></pre>
+<table class="cmp"><tr><th>Z3Py</th><th>Java API</th></tr>
+<tr><td><code>Int('x')</code>, <code>Bool('p')</code>, <code>BitVec('v', 32)</code></td><td><code>ctx.mkIntConst("x")</code>, <code>ctx.mkBoolConst("p")</code>, <code>ctx.mkBVConst("v", 32)</code></td></tr>
+<tr><td><code>5</code> внутри формулы</td><td><code>ctx.mkInt(5)</code>, <code>ctx.mkBV(5, 32)</code></td></tr>
+<tr><td><code>x + y</code>, <code>x * 2</code></td><td><code>ctx.mkAdd(x, y)</code>, <code>ctx.mkMul(x, ctx.mkInt(2))</code></td></tr>
+<tr><td><code>x == y</code>, <code>x &lt; y</code></td><td><code>ctx.mkEq(x, y)</code>, <code>ctx.mkLt(x, y)</code></td></tr>
+<tr><td><code>And</code>, <code>Or</code>, <code>Not</code>, <code>Implies</code></td><td><code>mkAnd</code>, <code>mkOr</code>, <code>mkNot</code>, <code>mkImplies</code></td></tr>
+<tr><td><code>If(c, a, b)</code>, <code>Distinct(…)</code></td><td><code>mkITE(c, a, b)</code>, <code>mkDistinct(…)</code></td></tr>
+<tr><td><code>s.check() == sat</code></td><td><code>s.check() == Status.SATISFIABLE</code></td></tr>
+<tr><td><code>m[x].as_long()</code></td><td><code>((IntNum) m.eval(x, true)).getInt()</code></td></tr>
+<tr><td><code>Optimize()</code>, <code>o.minimize(e)</code></td><td><code>ctx.mkOptimize()</code>, <code>o.MkMinimize(e)</code></td></tr></table>
+<p>Где Z3 работает в реальном мире: верификаторы Dafny, Boogie, F*; символьное выполнение (angr, Microsoft SAGE); проверка оптимизаций LLVM (Alive2); проверка политик доступа в облаках; планирование и проверка конфигураций.</p>`,
+  questions: [
+    { q: 'Какой объект в Java API создаёт все выражения и решатели?', options: ['Solver', 'Context', 'Model', 'Z3Factory'], correct: 1, explain: 'Всё создаётся через ctx.mk…, а Context нужно закрывать (try-with-resources).' },
+    { q: 'Как записать в Java условие x + 1 > y?', options: ['x + 1 > y', 'ctx.mkGt(ctx.mkAdd(x, ctx.mkInt(1)), y)', 'ctx.mkGt(x + 1, y)', 's.add("x + 1 > y")'], correct: 1, explain: 'Перегрузки операторов в Java нет, и числа нужно оборачивать в mkInt.' },
+    { q: 'Как в Java проверить, что решение найдено?', options: ['s.check() == true', 's.check() == Status.SATISFIABLE', 's.isSat()', 's.check().equals("sat")'], correct: 1, explain: 'check() возвращает enum Status.' },
+    { q: 'Как записать в Java API If(c, a, b)?', options: ['ctx.mkIf(c, a, b)', 'ctx.mkITE(c, a, b)', 'c ? a : b', 'ctx.mkCond(c, a, b)'], correct: 1, explain: 'ITE = if-then-else, как ite в SMT-LIB. А тернарный оператор Java выбрал бы одно из выражений сразу, а не построил формулу.' }
+  ]
+},
+{
+  id: 'java-first', ch: 8, type: 'java', title: 'Первая программа на Java',
+  story: 'Повторим самую первую задачу Бюро, но уже на Java: двое получили вместе 10 тысяч, первый — на 4 тысячи больше.',
+  theory: `
+<p>Консоль этой главы выполняет <b>Java</b>. Пишите полноценный класс <code>Main</code> с методом <code>main</code> — как в IDE. Поддерживаются переменные, циклы, массивы, <code>List</code>/<code>Map</code>, статические методы и <code>try</code> с ресурсами. Лямбды, стримы и свои классы не поддерживаются.</p>
+<pre><code>try (Context ctx = new Context()) {
+    IntExpr a = ctx.mkIntConst("a");
+    Solver s = ctx.mkSolver();
+    s.add(ctx.mkEq(ctx.mkMul(a, ctx.mkInt(3)), ctx.mkInt(21)));   // 3a == 21
+    System.out.println(s.check());      // SATISFIABLE
+    System.out.println(s.getModel());   // (define-fun a () Int 7)
+}</code></pre>
+<p>Обратите внимание: в Java модель и решатель печатаются на языке SMT-LIB — вы уже знаете его по главе 7.</p>`,
+  task: 'Создайте <code>x</code> и <code>y</code> через <code>ctx.mkIntConst</code>, добавьте <code>x + y == 10</code> и <code>x - y == 4</code>, проверьте и напечатайте модель.',
+  starter: cls('IntExpr x = ctx.mkIntConst("x");\nIntExpr y = ctx.mkIntConst("y");\nSolver s = ctx.mkSolver();\n\n// TODO: s.add(...)\n\nSystem.out.println(s.check());\nSystem.out.println(s.getModel());'),
+  solution: cls('IntExpr x = ctx.mkIntConst("x");\nIntExpr y = ctx.mkIntConst("y");\nSolver s = ctx.mkSolver();\n\ns.add(ctx.mkEq(ctx.mkAdd(x, y), ctx.mkInt(10)));\ns.add(ctx.mkEq(ctx.mkSub(x, y), ctx.mkInt(4)));\n\nSystem.out.println(s.check());\nSystem.out.println(s.getModel());'),
+  hint: 's.add(ctx.mkEq(ctx.mkAdd(x, y), ctx.mkInt(10))); и аналогично с ctx.mkSub(x, y) и 4.',
+  check: function (h) { return h.modelOk("x, y = Ints('x y')\nE = [x + y == 10, x - y == 4]"); },
+  success: 'Тот же ответ — 7 и 3, но теперь из Java. Почувствовали, насколько многословнее без перегрузки операторов?'
+},
+{
+  id: 'java-values', ch: 8, type: 'java', title: 'Числа из модели',
+  story: 'Сервис должен не просто напечатать модель, а использовать найденные числа дальше в Java-коде. Задача: два положительных числа, разность 5, произведение 36.',
+  theory: `
+<p>Достать значение из модели можно двумя способами:</p>
+<pre><code>Model m = s.getModel();
+Expr v1 = m.eval(x, true);          // вычислить выражение; true = "достроить" модель
+Expr v2 = m.getConstInterp(x);      // интерпретация константы или null!
+
+int xv = ((IntNum) m.eval(x, true)).getInt();       // Int → int
+long bv = ((BitVecNum) m.eval(v, true)).getLong();  // BitVec → long (беззнаковое!)</code></pre>
+<ul><li><code>eval(e, true)</code> — <i>model completion</i>: если переменная не попала в модель (не участвовала в ограничениях), подставится значение по умолчанию. С <code>false</code> вернётся само выражение — и приведение к <code>IntNum</code> упадёт.</li>
+<li><code>getConstInterp</code> возвращает <code>null</code> для таких переменных — частая причина <code>NullPointerException</code>.</li>
+<li><code>eval</code> вычисляет и сложные выражения: <code>m.eval(ctx.mkMul(x, y), true)</code>.</li>
+<li><code>BitVecNum.getInt()</code> бросает исключение, если беззнаковое значение не помещается в int. Для отрицательных чисел используйте <code>(int) num.getLong()</code>.</li></ul>`,
+  task: 'Найдите <code>x &gt; 0</code>, <code>y &gt; 0</code>, <code>x - y == 5</code>, <code>x * y == 36</code>. Получите значения как <code>int</code> и напечатайте строку вида <code>x = 9, y = 4</code>.',
+  starter: cls('IntExpr x = ctx.mkIntConst("x");\nIntExpr y = ctx.mkIntConst("y");\nSolver s = ctx.mkSolver();\n\n// ограничения\n\nif (s.check() == Status.SATISFIABLE) {\n    Model m = s.getModel();\n    // int xv = ...\n    // int yv = ...\n    // System.out.println("x = " + xv + ", y = " + yv);\n}'),
+  solution: cls('IntExpr x = ctx.mkIntConst("x");\nIntExpr y = ctx.mkIntConst("y");\nSolver s = ctx.mkSolver();\n\ns.add(ctx.mkGt(x, ctx.mkInt(0)), ctx.mkGt(y, ctx.mkInt(0)));\ns.add(ctx.mkEq(ctx.mkSub(x, y), ctx.mkInt(5)));\ns.add(ctx.mkEq(ctx.mkMul(x, y), ctx.mkInt(36)));\n\nif (s.check() == Status.SATISFIABLE) {\n    Model m = s.getModel();\n    int xv = ((IntNum) m.eval(x, true)).getInt();\n    int yv = ((IntNum) m.eval(y, true)).getInt();\n    System.out.println("x = " + xv + ", y = " + yv);\n    System.out.println("проверка: x * y = " + (xv * yv));\n}'),
+  hint: 'int xv = ((IntNum) m.eval(x, true)).getInt(); — то же для y.',
+  check: function (h) {
+    var r = h.modelOk("x, y = Ints('x y')\nE = [x > 0, y > 0, x - y == 5, x * y == 36]"); if (r) return r;
+    if (!/x\s*=\s*9/.test(h.text) || !/y\s*=\s*4/.test(h.text)) return h.fail('Модель верная, но напечатайте значения как числа Java: строку вида «x = 9, y = 4».');
+    return null;
+  },
+  success: 'Числа из модели теперь — обычные int, с ними можно работать дальше.'
+},
+{
+  id: 'java-prove', ch: 8, type: 'java', title: 'Доказательство на Java',
+  story: 'В коде повсюду встречаются вложенные <code>Math.max</code>. Коллега хочет переписать <code>max(a, max(b, c))</code> как <code>max(max(a, b), c)</code>. Докажите, что это безопасно для любых чисел.',
+  theory: `
+<p>В Java API нет готовой функции <code>prove</code> — её пишут сами. Идея та же: утверждение верно всегда ⇔ его отрицание невыполнимо.</p>
+<pre><code>static boolean prove(Context ctx, BoolExpr claim) {
+    Solver s = ctx.mkSolver();
+    s.add(ctx.mkNot(claim));
+    Status st = s.check();
+    if (st == Status.SATISFIABLE) System.out.println("контрпример: " + s.getModel());
+    return st == Status.UNSATISFIABLE;
+}</code></pre>
+<p>Вспомогательные методы, которые <b>строят</b> выражения, делают код читаемым:</p>
+<pre><code>static ArithExpr&lt;IntSort&gt; max(Context ctx, ArithExpr&lt;IntSort&gt; a, ArithExpr&lt;IntSort&gt; b) {
+    return (ArithExpr&lt;IntSort&gt;) ctx.mkITE(ctx.mkGe(a, b), a, b);
+}</code></pre>
+<p>Обратите внимание: это <b>не</b> вычисление максимума, а построение формулы «если a ≥ b, то a, иначе b».</p>`,
+  task: 'Для <code>IntExpr a, b, c</code> докажите <code>max(a, max(b, c)) == max(max(a, b), c)</code> и напечатайте результат.',
+  starter: HEAD + '    static ArithExpr<IntSort> max(Context ctx, ArithExpr<IntSort> a, ArithExpr<IntSort> b) {\n        // TODO: return (ArithExpr<IntSort>) ctx.mkITE(...)\n        return a;\n    }\n\n    static boolean prove(Context ctx, BoolExpr claim) {\n        Solver s = ctx.mkSolver();\n        // TODO\n        return false;\n    }\n\n    public static void main(String[] args) {\n        try (Context ctx = new Context()) {\n            IntExpr a = ctx.mkIntConst("a"), b = ctx.mkIntConst("b"), c = ctx.mkIntConst("c");\n            BoolExpr claim = ctx.mkEq(max(ctx, a, max(ctx, b, c)), max(ctx, max(ctx, a, b), c));\n            System.out.println(prove(ctx, claim) ? "доказано" : "неверно");\n        }\n    }\n}\n',
+  solution: HEAD + '    static ArithExpr<IntSort> max(Context ctx, ArithExpr<IntSort> a, ArithExpr<IntSort> b) {\n        return (ArithExpr<IntSort>) ctx.mkITE(ctx.mkGe(a, b), a, b);\n    }\n\n    static boolean prove(Context ctx, BoolExpr claim) {\n        Solver s = ctx.mkSolver();\n        s.add(ctx.mkNot(claim));\n        Status st = s.check();\n        if (st == Status.SATISFIABLE) System.out.println("контрпример: " + s.getModel());\n        return st == Status.UNSATISFIABLE;\n    }\n\n    public static void main(String[] args) {\n        try (Context ctx = new Context()) {\n            IntExpr a = ctx.mkIntConst("a"), b = ctx.mkIntConst("b"), c = ctx.mkIntConst("c");\n            BoolExpr claim = ctx.mkEq(max(ctx, a, max(ctx, b, c)), max(ctx, max(ctx, a, b), c));\n            System.out.println(prove(ctx, claim) ? "доказано" : "неверно");\n        }\n    }\n}\n',
+  hint: 'max: return (ArithExpr<IntSort>) ctx.mkITE(ctx.mkGe(a, b), a, b); prove: s.add(ctx.mkNot(claim)); return s.check() == Status.UNSATISFIABLE;',
+  check: function (h) {
+    var ref = "a, b, c = Ints('a b c')\ndef mx(x, y): return If(x >= y, x, y)\nE = [mx(a, mx(b, c)) == mx(mx(a, b), c)]";
+    var r = h.refuted(ref); if (!r) return null;
+    var ref2 = "a, b, c = Ints('a b c')\ndef mx(x, y): return If(x > y, x, y)\nE = [mx(a, mx(b, c)) == mx(mx(a, b), c)]";
+    return h.refuted(ref2) ? r : null;
+  },
+  success: 'UNSATISFIABLE для отрицания — значит, доказано для всех целых. Метод prove(ctx, claim) пригодится дальше.'
+},
+{
+  id: 'java-loops', ch: 8, type: 'java', title: 'Циклы и массивы',
+  story: 'DevOps-команда распределяет 6 ночных задач по 3 серверам. Длительности задач (минуты): 7, 4, 5, 3, 6, 2. Каждый сервер должен закончить за 10 минут.',
+  theory: `
+<p>Ограничения удобно строить обычными циклами Java — как в Python:</p>
+<pre><code>IntExpr[] srv = new IntExpr[n];
+for (int i = 0; i &lt; n; i++) {
+    srv[i] = ctx.mkIntConst("task" + i);
+    s.add(ctx.mkGe(srv[i], ctx.mkInt(0)), ctx.mkLe(srv[i], ctx.mkInt(2)));
+}</code></pre>
+<p>Нагрузка сервера k — сумма длительностей задач, назначенных на него. Каждое слагаемое: <code>mkITE(mkEq(srv[i], mkInt(k)), mkInt(d[i]), mkInt(0))</code>. Список слагаемых передаётся в <code>mkAdd</code> массивом — varargs Java это позволяют:</p>
+<pre><code>ArithExpr&lt;IntSort&gt;[] parts = new ArithExpr[n];
+...
+s.add(ctx.mkLe(ctx.mkAdd(parts), ctx.mkInt(10)));</code></pre>`,
+  task: 'Назначьте задачам серверы: переменные <code>task0 … task5</code> (Int, значения 0–2), нагрузка каждого сервера ≤ 10. Напечатайте распределение.',
+  starter: cls('int[] dur = {7, 4, 5, 3, 6, 2};\nint n = dur.length;\nSolver s = ctx.mkSolver();\nIntExpr[] srv = new IntExpr[n];\nfor (int i = 0; i < n; i++) {\n    srv[i] = ctx.mkIntConst("task" + i);\n    // TODO: 0 <= srv[i] <= 2\n}\nfor (int k = 0; k < 3; k++) {\n    // TODO: нагрузка сервера k <= 10\n}\nif (s.check() == Status.SATISFIABLE) {\n    Model m = s.getModel();\n    for (int i = 0; i < n; i++)\n        System.out.println("задача " + i + " (" + dur[i] + " мин) -> сервер " + m.eval(srv[i], true));\n} else {\n    System.out.println("не помещается");\n}'),
+  solution: cls('int[] dur = {7, 4, 5, 3, 6, 2};\nint n = dur.length;\nSolver s = ctx.mkSolver();\nIntExpr[] srv = new IntExpr[n];\nfor (int i = 0; i < n; i++) {\n    srv[i] = ctx.mkIntConst("task" + i);\n    s.add(ctx.mkGe(srv[i], ctx.mkInt(0)), ctx.mkLe(srv[i], ctx.mkInt(2)));\n}\nfor (int k = 0; k < 3; k++) {\n    ArithExpr<IntSort>[] parts = new ArithExpr[n];\n    for (int i = 0; i < n; i++)\n        parts[i] = (ArithExpr<IntSort>) ctx.mkITE(ctx.mkEq(srv[i], ctx.mkInt(k)), ctx.mkInt(dur[i]), ctx.mkInt(0));\n    s.add(ctx.mkLe(ctx.mkAdd(parts), ctx.mkInt(10)));\n}\nif (s.check() == Status.SATISFIABLE) {\n    Model m = s.getModel();\n    for (int i = 0; i < n; i++)\n        System.out.println("задача " + i + " (" + dur[i] + " мин) -> сервер " + m.eval(srv[i], true));\n} else {\n    System.out.println("не помещается");\n}'),
+  hint: 'Внутри цикла по k соберите массив parts[i] = mkITE(mkEq(srv[i], mkInt(k)), mkInt(dur[i]), mkInt(0)) и добавьте s.add(ctx.mkLe(ctx.mkAdd(parts), ctx.mkInt(10))).',
+  check: function (h) { return h.modelOk("t = [Int(f'task{i}') for i in range(6)]\nd = [7, 4, 5, 3, 6, 2]\nE = [And(0 <= x, x <= 2) for x in t] + [Sum([If(t[i] == k, d[i], 0) for i in range(6)]) <= 10 for k in range(3)]"); },
+  success: 'Распределение найдено: 27 минут работы на трёх серверах по 10. Это задача упаковки (bin packing) — NP-трудная, но для таких размеров решатель справляется мгновенно.'
+},
+{
+  id: 'java-overflow', ch: 8, type: 'java', title: 'Переполнение в бизнес-коде', star: true,
+  story: 'Интернет-магазин проверяет, хватает ли денег на покупку:<pre><code>static boolean canAfford(int balance, int price, int qty) {\n    return price * qty &lt;= balance;\n}</code></pre>Тестировщики не нашли багов. Найдите положительные <code>balance</code>, <code>price</code>, <code>qty</code>, при которых метод разрешает покупку, хотя настоящая стоимость больше баланса.',
+  theory: `
+<p>Java <code>int</code> — это BitVec(32). Для таких проверок у Java API есть специальные предикаты «без переполнения»:</p>
+<pre><code>ctx.mkBVAddNoOverflow(a, b, true)    // a + b не переполняется (true = знаковые)
+ctx.mkBVAddNoUnderflow(a, b)
+ctx.mkBVSubNoOverflow(a, b)  /  mkBVSubNoUnderflow(a, b, true)
+ctx.mkBVMulNoOverflow(a, b, true)
+ctx.mkBVMulNoUnderflow(a, b)
+ctx.mkBVNegNoOverflow(a)               // -a не переполняется (a != MIN_VALUE)
+ctx.mkBVSDivNoOverflow(a, b)           // не MIN_VALUE / -1</code></pre>
+<p>Нужное условие: «произведение переполнилось» = <code>mkNot(mkBVMulNoOverflow(price, qty, true))</code>, плюс сравнение в 32-битной арифметике проходит.</p>
+<p>Сравнения со знаком: <code>mkBVSGT</code>, <code>mkBVSLE</code> и т.д. (S — signed).</p>`,
+  task: 'Используйте <code>mkBVConst</code> с именами <code>balance</code>, <code>price</code>, <code>qty</code> (32 бита). Найдите вход и напечатайте значения как <code>int</code>.',
+  starter: cls('BitVecExpr balance = ctx.mkBVConst("balance", 32);\nBitVecExpr price = ctx.mkBVConst("price", 32);\nBitVecExpr qty = ctx.mkBVConst("qty", 32);\nBitVecExpr zero = ctx.mkBV(0, 32);\nSolver s = ctx.mkSolver();\n\n// TODO: все три > 0\n// TODO: price * qty <= balance (32-битное сравнение, как в Java)\n// TODO: произведение переполнилось\n\nif (s.check() == Status.SATISFIABLE) {\n    Model m = s.getModel();\n    int b = (int) ((BitVecNum) m.eval(balance, true)).getLong();\n    int p = (int) ((BitVecNum) m.eval(price, true)).getLong();\n    int q = (int) ((BitVecNum) m.eval(qty, true)).getLong();\n    System.out.println("balance=" + b + " price=" + p + " qty=" + q);\n    System.out.println("price * qty в Java = " + (p * q) + ", на самом деле = " + ((long) p * q));\n}'),
+  solution: cls('BitVecExpr balance = ctx.mkBVConst("balance", 32);\nBitVecExpr price = ctx.mkBVConst("price", 32);\nBitVecExpr qty = ctx.mkBVConst("qty", 32);\nBitVecExpr zero = ctx.mkBV(0, 32);\nSolver s = ctx.mkSolver();\n\ns.add(ctx.mkBVSGT(balance, zero), ctx.mkBVSGT(price, zero), ctx.mkBVSGT(qty, zero));\ns.add(ctx.mkBVSLE(ctx.mkBVMul(price, qty), balance));\ns.add(ctx.mkNot(ctx.mkBVMulNoOverflow(price, qty, true)));\n\nif (s.check() == Status.SATISFIABLE) {\n    Model m = s.getModel();\n    int b = (int) ((BitVecNum) m.eval(balance, true)).getLong();\n    int p = (int) ((BitVecNum) m.eval(price, true)).getLong();\n    int q = (int) ((BitVecNum) m.eval(qty, true)).getLong();\n    System.out.println("balance=" + b + " price=" + p + " qty=" + q);\n    System.out.println("price * qty в Java = " + (p * q) + ", на самом деле = " + ((long) p * q));\n}'),
+  hint: 's.add(ctx.mkBVSGT(balance, zero), ctx.mkBVSGT(price, zero), ctx.mkBVSGT(qty, zero)); s.add(ctx.mkBVSLE(ctx.mkBVMul(price, qty), balance)); s.add(ctx.mkNot(ctx.mkBVMulNoOverflow(price, qty, true)));',
+  check: function (h) {
+    var b = h.base(); if (b) return b;
+    var B = h.val('balance'), P = h.val('price'), Q = h.val('qty');
+    if (B === undefined || P === undefined || Q === undefined) return h.fail('В модели нет переменных balance, price, qty (BitVec 32).');
+    var bb = s32(B), pp = s32(P), qq = s32(Q);
+    if (!(bb > 0 && pp > 0 && qq > 0)) return h.fail('Все три значения должны быть положительными int.');
+    if (!(Math.imul(pp, qq) <= bb)) return h.fail('С этими значениями Java-метод вернёт false — покупка не пройдёт.');
+    if (!(BigInt(pp) * BigInt(qq) > BigInt(bb))) return h.fail('Покупка проходит, но денег действительно хватает — это не баг. Нужен случай с переполнением.');
+    return null;
+  },
+  success: 'Произведение перевалило за 2³¹ и стало маленьким или отрицательным — проверка пройдена «бесплатно». Исправления: Math.multiplyExact(price, qty) (бросит исключение) или (long) price * qty <= balance.'
+},
+{
+  id: 'java-refactor', ch: 8, type: 'java', title: 'Рефакторинг условий',
+  story: 'Джун «упростил» правило скидки:<pre><code>// было\nstatic boolean eligible(int age, boolean member, int total) {\n    if (member) {\n        if (total &gt;= 1000) return true;\n        return age &gt;= 65;\n    }\n    return total &gt;= 5000 || (age &gt;= 65 &amp;&amp; total &gt;= 1000);\n}\n// стало\nstatic boolean eligible2(int age, boolean member, int total) {\n    return total &gt;= 5000 || (age &gt;= 65 &amp;&amp; (member || total &gt;= 100))\n        || (member &amp;&amp; total &gt;= 1000);\n}</code></pre>Тесты зелёные. Найдите вход, на котором версии расходятся.',
+  theory: `
+<p>Ветвления <code>if/return</code> переводятся во вложенные <code>mkITE</code>, а <code>&amp;&amp;</code> и <code>||</code> — в <code>mkAnd</code> и <code>mkOr</code>:</p>
+<pre><code>// if (c) return A; return B;   →   ctx.mkITE(c, A, B)
+BoolExpr v1 = (BoolExpr) ctx.mkITE(member, ..., ...);</code></pre>
+<p>Две реализации различаются, если выполнимо <code>v1 != v2</code>: <code>ctx.mkNot(ctx.mkEq(v1, v2))</code> (или <code>ctx.mkXor(v1, v2)</code>).</p>
+<p>Совет: напишите для каждой версии статический метод, который принимает выражения Z3 и возвращает <code>BoolExpr</code>, — так код похож на оригинал.</p>`,
+  task: 'Используйте <code>IntExpr age</code>, <code>BoolExpr member</code>, <code>IntExpr total</code> (именно с такими именами). Найдите вход, на котором методы возвращают разное, и напечатайте его.',
+  starter: HEAD + '    static BoolExpr v1(Context ctx, IntExpr age, BoolExpr member, IntExpr total) {\n        // TODO: старая версия\n        return ctx.mkTrue();\n    }\n\n    static BoolExpr v2(Context ctx, IntExpr age, BoolExpr member, IntExpr total) {\n        // TODO: новая версия\n        return ctx.mkTrue();\n    }\n\n    public static void main(String[] args) {\n        try (Context ctx = new Context()) {\n            IntExpr age = ctx.mkIntConst("age"), total = ctx.mkIntConst("total");\n            BoolExpr member = ctx.mkBoolConst("member");\n            Solver s = ctx.mkSolver();\n            s.add(ctx.mkNot(ctx.mkEq(v1(ctx, age, member, total), v2(ctx, age, member, total))));\n            if (s.check() == Status.SATISFIABLE) System.out.println("расходятся на: " + s.getModel());\n            else System.out.println("эквивалентны");\n        }\n    }\n}\n',
+  solution: HEAD + '    static BoolExpr v1(Context ctx, IntExpr age, BoolExpr member, IntExpr total) {\n        BoolExpr memberBranch = ctx.mkOr(ctx.mkGe(total, ctx.mkInt(1000)), ctx.mkGe(age, ctx.mkInt(65)));\n        BoolExpr otherBranch = ctx.mkOr(ctx.mkGe(total, ctx.mkInt(5000)),\n                ctx.mkAnd(ctx.mkGe(age, ctx.mkInt(65)), ctx.mkGe(total, ctx.mkInt(1000))));\n        return (BoolExpr) ctx.mkITE(member, memberBranch, otherBranch);\n    }\n\n    static BoolExpr v2(Context ctx, IntExpr age, BoolExpr member, IntExpr total) {\n        return ctx.mkOr(ctx.mkGe(total, ctx.mkInt(5000)),\n                ctx.mkAnd(ctx.mkGe(age, ctx.mkInt(65)), ctx.mkOr(member, ctx.mkGe(total, ctx.mkInt(100)))),\n                ctx.mkAnd(member, ctx.mkGe(total, ctx.mkInt(1000))));\n    }\n\n    public static void main(String[] args) {\n        try (Context ctx = new Context()) {\n            IntExpr age = ctx.mkIntConst("age"), total = ctx.mkIntConst("total");\n            BoolExpr member = ctx.mkBoolConst("member");\n            Solver s = ctx.mkSolver();\n            s.add(ctx.mkNot(ctx.mkEq(v1(ctx, age, member, total), v2(ctx, age, member, total))));\n            if (s.check() == Status.SATISFIABLE) System.out.println("расходятся на: " + s.getModel());\n            else System.out.println("эквивалентны");\n        }\n    }\n}\n',
+  hint: 'v1: mkITE(member, mkOr(total ≥ 1000, age ≥ 65), mkOr(total ≥ 5000, mkAnd(age ≥ 65, total ≥ 1000))). v2: mkOr из трёх частей — перепишите дословно.',
+  check: function (h) {
+    var b = h.base(); if (b) return b;
+    var rec = h.lastSat();
+    if (!rec) return h.fail('Расхождение не найдено. Если решатель ответил UNSATISFIABLE — проверьте, точно ли вы перенесли обе версии (особенно числа).');
+    var A = h.val('age', rec), M = h.val('member', rec), T = h.val('total', rec);
+    if (A === undefined || M === undefined || T === undefined) return h.fail('В модели должны быть age (Int), member (Bool) и total (Int).');
+    var a = Number(A), t = Number(T);
+    if (eligOld(a, M, t) === eligNew(a, M, t)) return h.fail('На найденном входе (age=' + a + ', member=' + M + ', total=' + t + ') настоящие методы Java дают одинаковый ответ. Проверьте перевод условий.');
+    return null;
+  },
+  success: 'Опечатка 100 вместо 1000: пенсионер без членства с покупкой на 100–999 получает скидку. Тесты этот угол не покрывали, а решатель нашёл его за миллисекунды.'
+},
+{
+  id: 'java-tests', ch: 8, type: 'java', title: 'Генерация тестов', star: true,
+  story: 'Нужно покрыть тестами все ветки метода. Вместо подбора руками пусть входы найдёт решатель:<pre><code>static String classify(int a, int b) {\n    if (a &gt; b * 2) {\n        if (a % 3 == 0) return "A";\n        return "B";\n    }\n    if (a + b == 100) return "C";\n    return "D";\n}</code></pre>',
+  theory: `
+<p>Каждой ветке соответствует своё <b>условие пути</b> (path condition):</p>
+<ul><li>A: <code>a &gt; 2b ∧ a % 3 == 0</code></li><li>B: <code>a &gt; 2b ∧ a % 3 ≠ 0</code></li><li>C: <code>a ≤ 2b ∧ a + b == 100</code></li><li>D: <code>a ≤ 2b ∧ a + b ≠ 100</code></li></ul>
+<p>Общие ограничения (диапазон значений) добавляются один раз, а условие каждой ветки проверяется между <code>push()</code> и <code>pop()</code>:</p>
+<pre><code>for (int i = 0; i &lt; paths.length; i++) {
+    s.push();
+    s.add(paths[i]);
+    if (s.check() == Status.SATISFIABLE) { ... напечатать тест ... }
+    s.pop();
+}</code></pre>
+<p>Можно и без push/pop — передать условие как <b>предположение</b> (assumption): <code>s.check(paths[i])</code>.</p>
+<p>Ограничьте значения диапазоном −1000…1000: так тесты будут читаемыми, а <code>Int</code> из Z3 совпадёт с Java <code>int</code> без переполнения. Для неотрицательного a остаток <code>a % 3</code> в Java и <code>mkMod</code> в Z3 совпадают; для отрицательных отличаются, поэтому в заготовке добавлено <code>a ≥ 0</code>.</p>`,
+  task: 'Для каждой из четырёх веток найдите вход и напечатайте строку вида <code>A: a=…, b=…</code>.',
+  starter: cls('IntExpr a = ctx.mkIntConst("a"), b = ctx.mkIntConst("b");\nSolver s = ctx.mkSolver();\ns.add(ctx.mkGe(a, ctx.mkInt(0)), ctx.mkLe(a, ctx.mkInt(1000)));\ns.add(ctx.mkGe(b, ctx.mkInt(-1000)), ctx.mkLe(b, ctx.mkInt(1000)));\n\nBoolExpr first = ctx.mkGt(a, ctx.mkMul(b, ctx.mkInt(2)));\nBoolExpr div3 = ctx.mkEq(ctx.mkMod(a, ctx.mkInt(3)), ctx.mkInt(0));\nBoolExpr sum100 = ctx.mkEq(ctx.mkAdd(a, b), ctx.mkInt(100));\n\nString[] names = {"A", "B", "C", "D"};\nBoolExpr[] paths = {\n    // TODO: четыре условия пути\n};\nfor (int i = 0; i < paths.length; i++) {\n    // TODO\n}'),
+  solution: cls('IntExpr a = ctx.mkIntConst("a"), b = ctx.mkIntConst("b");\nSolver s = ctx.mkSolver();\ns.add(ctx.mkGe(a, ctx.mkInt(0)), ctx.mkLe(a, ctx.mkInt(1000)));\ns.add(ctx.mkGe(b, ctx.mkInt(-1000)), ctx.mkLe(b, ctx.mkInt(1000)));\n\nBoolExpr first = ctx.mkGt(a, ctx.mkMul(b, ctx.mkInt(2)));\nBoolExpr div3 = ctx.mkEq(ctx.mkMod(a, ctx.mkInt(3)), ctx.mkInt(0));\nBoolExpr sum100 = ctx.mkEq(ctx.mkAdd(a, b), ctx.mkInt(100));\n\nString[] names = {"A", "B", "C", "D"};\nBoolExpr[] paths = {\n    ctx.mkAnd(first, div3),\n    ctx.mkAnd(first, ctx.mkNot(div3)),\n    ctx.mkAnd(ctx.mkNot(first), sum100),\n    ctx.mkAnd(ctx.mkNot(first), ctx.mkNot(sum100))\n};\nfor (int i = 0; i < paths.length; i++) {\n    s.push();\n    s.add(paths[i]);\n    if (s.check() == Status.SATISFIABLE) {\n        Model m = s.getModel();\n        System.out.println(names[i] + ": a=" + m.eval(a, true) + ", b=" + m.eval(b, true));\n    } else {\n        System.out.println(names[i] + ": недостижима");\n    }\n    s.pop();\n}'),
+  hint: 'paths = { mkAnd(first, div3), mkAnd(first, mkNot(div3)), mkAnd(mkNot(first), sum100), mkAnd(mkNot(first), mkNot(sum100)) }; в цикле: push, add, check, печать, pop.',
+  check: function (h) {
+    var b = h.base(); if (b) return b;
+    var got = {};
+    h.out.forEach(function (l) {
+      var m = /\b([ABCD])\s*:.*?a\s*=\s*(-?\d+).*?b\s*=\s*(-?\d+)/.exec(l);
+      if (!m) return;
+      var a = +m[2], bb = +m[3];
+      if (Math.abs(a) > 2147483647 || Math.abs(bb) > 2147483647) return;
+      if (classify(a, bb) === m[1]) got[m[1]] = true;
+    });
+    var miss = ['A', 'B', 'C', 'D'].filter(function (x) { return !got[x]; });
+    if (miss.length) return h.fail('Не хватает рабочих тестов для веток: ' + miss.join(', ') + '. Каждая строка должна выглядеть как «A: a=…, b=…», и настоящий метод classify на этих данных должен вернуть ту же букву.');
+    return null;
+  },
+  success: 'Четыре теста — полное покрытие ветвлений. Так работают инструменты concolic-тестирования (например, JDart и Symbolic PathFinder для Java).'
+},
+{
+  id: 'java-flags', ch: 8, type: 'java', title: 'Конфликты фича-флагов',
+  story: 'В сервисе 5 фича-флагов. Правила совместимости:<br>• <code>legacyUi</code> несовместим с <code>darkMode</code>;<br>• <code>newCheckout</code> требует <code>beta</code>;<br>• <code>payments</code> требует <code>newCheckout</code> или <code>legacyUi</code>;<br>• <code>beta</code> несовместим с <code>legacyUi</code>.<br>Продакт задаёт вопросы: можно ли включить вместе (1) darkMode и legacyUi; (2) beta и payments; (3) legacyUi и newCheckout?',
+  theory: `
+<p>Правила добавляются в решатель один раз, а вопросы задаются через <b>предположения</b> (assumptions) — дополнительные аргументы <code>check</code>:</p>
+<pre><code>s.add(rules...);
+Status st = s.check(flagA, flagB);   // выполнимо ли при flagA = true и flagB = true?</code></pre>
+<p>Предположения действуют только на этот вызов — не нужно ни push/pop, ни пересоздания решателя. В настоящем Z3 после UNSATISFIABLE можно ещё спросить <code>s.getUnsatCore()</code> — какие из предположений конфликтуют (в этой игре не поддерживается).</p>
+<p>«A требует B» — это <code>mkImplies(a, b)</code>, «A несовместим с B» — <code>mkNot(mkAnd(a, b))</code>.</p>`,
+  task: 'Используйте <code>BoolExpr</code> с именами флагов. Добавьте правила и ответьте на три вопроса через <code>s.check(…)</code> с предположениями.',
+  starter: cls('BoolExpr darkMode = ctx.mkBoolConst("darkMode");\nBoolExpr legacyUi = ctx.mkBoolConst("legacyUi");\nBoolExpr beta = ctx.mkBoolConst("beta");\nBoolExpr payments = ctx.mkBoolConst("payments");\nBoolExpr newCheckout = ctx.mkBoolConst("newCheckout");\nSolver s = ctx.mkSolver();\n\n// TODO: четыре правила\n\nSystem.out.println("darkMode + legacyUi: " + s.check(darkMode, legacyUi));\n// TODO: ещё два вопроса'),
+  solution: cls('BoolExpr darkMode = ctx.mkBoolConst("darkMode");\nBoolExpr legacyUi = ctx.mkBoolConst("legacyUi");\nBoolExpr beta = ctx.mkBoolConst("beta");\nBoolExpr payments = ctx.mkBoolConst("payments");\nBoolExpr newCheckout = ctx.mkBoolConst("newCheckout");\nSolver s = ctx.mkSolver();\n\ns.add(ctx.mkNot(ctx.mkAnd(legacyUi, darkMode)));\ns.add(ctx.mkImplies(newCheckout, beta));\ns.add(ctx.mkImplies(payments, ctx.mkOr(newCheckout, legacyUi)));\ns.add(ctx.mkNot(ctx.mkAnd(beta, legacyUi)));\n\nSystem.out.println("darkMode + legacyUi: " + s.check(darkMode, legacyUi));\nSystem.out.println("beta + payments: " + s.check(beta, payments));\nSystem.out.println("legacyUi + newCheckout: " + s.check(legacyUi, newCheckout));'),
+  hint: 'Правила: mkNot(mkAnd(legacyUi, darkMode)), mkImplies(newCheckout, beta), mkImplies(payments, mkOr(newCheckout, legacyUi)), mkNot(mkAnd(beta, legacyUi)). Вопросы: s.check(beta, payments) и s.check(legacyUi, newCheckout).',
+  check: function (h) {
+    var b = h.base(); if (b) return b;
+    var rules = Z3C.mk('and', RUNNER.refExprs("dm, lu, be, pa, nc = Bools('darkMode legacyUi beta payments newCheckout')\nE = [Not(And(lu, dm)), Implies(nc, be), Implies(pa, Or(nc, lu)), Not(And(be, lu))]"));
+    var qs = [[['darkMode', 'legacyUi'], 'unsat'], [['beta', 'payments'], 'sat'], [['legacyUi', 'newCheckout'], 'unsat']];
+    for (var i = 0; i < qs.length; i++) {
+      var want = qs[i][0], found = null, wrongRules = false;
+      h.checks.forEach(function (c) {
+        var ex = (c.extra || []).map(function (e) { return e.op === 'var' ? e.name : '?'; }).sort();
+        if (ex.join() !== want.slice().sort().join()) return;
+        var base = c.asserts.slice(0, c.asserts.length - c.extra.length);
+        var conj = base.length ? (base.length === 1 ? base[0] : Z3C.mk('and', base)) : Z3C.mkBool(true);
+        if (h.equivF(conj, rules)) found = c; else wrongRules = true;
+      });
+      if (!found) return h.fail(wrongRules ? 'Вопрос «' + want.join(' + ') + '» задан, но правила в решателе не совпадают с условием. Проверьте все четыре правила.' : 'Нет проверки s.check(' + want.join(', ') + ') с предположениями.');
+      if (found.result !== qs[i][1]) return h.fail('Странно: ответ на «' + want.join(' + ') + '» неверный. Проверьте правила.');
+    }
+    return null;
+  },
+  success: 'darkMode + legacyUi — нельзя, beta + payments — можно (через newCheckout), legacyUi + newCheckout — нельзя (newCheckout требует beta, а beta несовместим с legacyUi). Последний конфликт неочевиден — его нашла цепочка из двух правил.'
+},
+{
+  id: 'java-optimize', ch: 8, type: 'java', title: 'Optimize: дешёвое облако',
+  story: 'Сервису нужно минимум 20 vCPU и 64 ГБ памяти. В облаке есть машины <b>small</b> (2 vCPU, 4 ГБ, 10 $/ч) и <b>large</b> (8 vCPU, 32 ГБ, 35 $/ч). Какая конфигурация самая дешёвая?',
+  theory: `
+<p>В Java API у <code>Optimize</code> исторически методы <b>с заглавной буквы</b> (наследие C#-биндингов):</p>
+<pre><code>Optimize o = ctx.mkOptimize();
+o.Add(ограничения...);
+Optimize.Handle&lt;IntSort&gt; h = o.MkMinimize(выражение);   // или MkMaximize
+if (o.Check() == Status.SATISFIABLE) {
+    System.out.println(o.getModel());
+    System.out.println("оптимум: " + h.getValue());
+}</code></pre>
+<p>Частая ошибка — написать <code>o.add(...)</code>: такого метода у Optimize нет.</p>`,
+  task: 'Переменные <code>small</code> и <code>large</code> (Int). Минимизируйте стоимость и напечатайте модель и значение цели.',
+  starter: cls('IntExpr small = ctx.mkIntConst("small"), large = ctx.mkIntConst("large");\nOptimize o = ctx.mkOptimize();\n\n// TODO: неотрицательность, CPU >= 20, память >= 64\n// TODO: Optimize.Handle<IntSort> cost = o.MkMinimize(...)\n\nif (o.Check() == Status.SATISFIABLE) {\n    System.out.println(o.getModel());\n}'),
+  solution: cls('IntExpr small = ctx.mkIntConst("small"), large = ctx.mkIntConst("large");\nOptimize o = ctx.mkOptimize();\n\no.Add(ctx.mkGe(small, ctx.mkInt(0)), ctx.mkGe(large, ctx.mkInt(0)));\no.Add(ctx.mkGe(ctx.mkAdd(ctx.mkMul(ctx.mkInt(2), small), ctx.mkMul(ctx.mkInt(8), large)), ctx.mkInt(20)));\no.Add(ctx.mkGe(ctx.mkAdd(ctx.mkMul(ctx.mkInt(4), small), ctx.mkMul(ctx.mkInt(32), large)), ctx.mkInt(64)));\nOptimize.Handle<IntSort> cost = o.MkMinimize(ctx.mkAdd(ctx.mkMul(ctx.mkInt(10), small), ctx.mkMul(ctx.mkInt(35), large)));\n\nif (o.Check() == Status.SATISFIABLE) {\n    System.out.println(o.getModel());\n    System.out.println("стоимость: " + cost.getValue() + " $/ч");\n}'),
+  hint: 'CPU: 2*small + 8*large ≥ 20; память: 4*small + 32*large ≥ 64; цель: 10*small + 35*large. Методы Optimize — Add, MkMinimize, Check.',
+  check: function (h) {
+    if (!h.usedOptimize()) return h.fail('Нужно использовать ctx.mkOptimize() и MkMinimize.');
+    return h.modelOk("s, l = Ints('small large')\nE = [s >= 0, l >= 0, 2*s + 8*l >= 20, 4*s + 32*l >= 64]") || h.modelOk("s, l = Ints('small large')\nE = [10*s + 35*l == 90]", 'Конфигурация подходит, но не самая дешёвая. Проверьте цель MkMinimize.');
+  },
+  success: '2 small + 2 large = 90 $/ч. Интуитивный вариант «только large» (3 штуки) стоит 105 $/ч.'
+},
+{
+  id: 'java-hash', ch: 8, type: 'java', title: 'Коллизия hashCode на Java',
+  story: 'Повторим атаку HashDoS, но теперь целиком на Java: найдите 4-буквенное слово (латиница) с тем же <code>hashCode()</code>, что у <code>"test"</code>, но не равное ему.',
+  theory: `
+<p>Формула <code>String.hashCode()</code> переводится циклом прямо в Java-коде — накапливаем выражение Z3:</p>
+<pre><code>BitVecExpr h = ctx.mkBV(0, 32);
+for (BitVecExpr c : cs)
+    h = ctx.mkBVAdd(ctx.mkBVMul(ctx.mkBV(31, 32), h), c);</code></pre>
+<p>Целевое значение посчитайте обычным Java: <code>"test".hashCode()</code>, а затем оберните в <code>ctx.mkBV(…, 32)</code>.</p>
+<p>Символ из модели: <code>(char) ((BitVecNum) m.eval(c, true)).getLong()</code>.</p>`,
+  task: 'Найдите слово и напечатайте его отдельной строкой.',
+  starter: cls('String target = "test";\nBitVecExpr[] cs = new BitVecExpr[4];\nfor (int i = 0; i < 4; i++) cs[i] = ctx.mkBVConst("c" + i, 32);\nSolver s = ctx.mkSolver();\n\n// TODO: каждая буква — A..Z или a..z\n// TODO: хеш совпадает с target.hashCode()\n// TODO: слово отличается от target\n\nif (s.check() == Status.SATISFIABLE) {\n    Model m = s.getModel();\n    StringBuilder sb = new StringBuilder();\n    // TODO: собрать слово\n    System.out.println(sb.toString());\n}'),
+  solution: cls('String target = "test";\nBitVecExpr[] cs = new BitVecExpr[4];\nfor (int i = 0; i < 4; i++) cs[i] = ctx.mkBVConst("c" + i, 32);\nSolver s = ctx.mkSolver();\n\nBitVecExpr h = ctx.mkBV(0, 32);\nBoolExpr[] diff = new BoolExpr[4];\nfor (int i = 0; i < 4; i++) {\n    BitVecExpr c = cs[i];\n    s.add(ctx.mkOr(\n        ctx.mkAnd(ctx.mkBVSGE(c, ctx.mkBV(65, 32)), ctx.mkBVSLE(c, ctx.mkBV(90, 32))),\n        ctx.mkAnd(ctx.mkBVSGE(c, ctx.mkBV(97, 32)), ctx.mkBVSLE(c, ctx.mkBV(122, 32)))));\n    h = ctx.mkBVAdd(ctx.mkBVMul(ctx.mkBV(31, 32), h), c);\n    diff[i] = ctx.mkNot(ctx.mkEq(c, ctx.mkBV(target.charAt(i), 32)));\n}\ns.add(ctx.mkEq(h, ctx.mkBV(target.hashCode(), 32)));\ns.add(ctx.mkOr(diff));\n\nif (s.check() == Status.SATISFIABLE) {\n    Model m = s.getModel();\n    StringBuilder sb = new StringBuilder();\n    for (BitVecExpr c : cs) sb.append((char) ((BitVecNum) m.eval(c, true)).getLong());\n    System.out.println(sb.toString());\n    System.out.println(sb.toString().hashCode() == target.hashCode());\n}'),
+  hint: 'В одном цикле: ограничение на букву, h = mkBVAdd(mkBVMul(mkBV(31, 32), h), c) и diff[i] = mkNot(mkEq(c, mkBV(target.charAt(i), 32))). Затем s.add(mkEq(h, mkBV(target.hashCode(), 32))) и s.add(mkOr(diff)).',
+  check: function (h) {
+    var b = h.base(); if (b) return b;
+    var t = jhash('test'), words = h.text.match(/(^|[^A-Za-z])([A-Za-z]{4})(?=[^A-Za-z]|$)/gm) || [];
+    for (var i = 0; i < words.length; i++) { var w = words[i].replace(/[^A-Za-z]/g, ''); if (w !== 'test' && jhash(w) === t) return null; }
+    return h.fail('В выводе нет подходящего слова: 4 латинские буквы, не «test», с тем же hashCode. Напечатайте его отдельной строкой.');
+  },
+  success: 'Коллизия найдена средствами Java. Обратите внимание на mkBV(target.charAt(i), 32): char в Java — число, и Z3 принимает его как константу.'
+},
+{
+  id: 'q-java2', ch: 8, type: 'quiz', title: 'Z3 в продакшене',
+  story: 'Последний инструктаж Java-отдела: что нужно знать, прежде чем тащить Z3 в боевой сервис.',
+  theory: `
+<ul>
+<li><b>Context не потокобезопасен.</b> Один контекст — один поток. Для параллельной работы создают по контексту на поток (или пул контекстов).</li>
+<li><b>Не смешивайте контексты:</b> выражение из одного <code>Context</code> нельзя добавить в решатель другого — будет <code>Z3Exception</code>.</li>
+<li><b>Закрывайте Context</b> (<code>try-with-resources</code>): за ним стоит нативная память, которую сборщик мусора Java сам вовремя не освободит.</li>
+<li><b>Таймауты.</b> Решатель может работать сколь угодно долго. Задайте ограничение:
+<pre><code>Params p = ctx.mkParams();
+p.add("timeout", 5000);          // миллисекунды
+s.setParameters(p);
+if (s.check() == Status.UNKNOWN) log.warn(s.getReasonUnknown());</code></pre></li>
+<li><b>UNKNOWN — нормальный ответ</b>: таймаут, нелинейная арифметика, кванторы. Код должен его обрабатывать, а не считать ни SAT, ни UNSAT.</li>
+<li><b>getModel()</b> бросает исключение, если последний <code>check()</code> не вернул SATISFIABLE.</li>
+<li><b>Инкрементальность:</b> <code>push/pop</code> и предположения <code>check(a, b)</code> позволяют задавать много вопросов одному решателю — это быстрее, чем пересоздавать его.</li>
+</ul>`,
+  questions: [
+    { q: 'Два потока одновременно работают с одним Context. Что будет?', options: ['Всё нормально, Z3 потокобезопасен', 'Возможны падения и порча данных: Context не потокобезопасен', 'Z3 автоматически создаст второй контекст'], correct: 1, explain: 'Правило: один контекст на поток.' },
+    { q: 'Как ограничить время решения 5 секундами?', options: ['Thread.sleep(5000)', 'Params p = ctx.mkParams(); p.add("timeout", 5000); s.setParameters(p);', 's.check(5000)', 'Никак'], correct: 1, explain: 'По истечении таймаута check() вернёт UNKNOWN.' },
+    { q: 'check() вернул UNKNOWN. Как правильно поступить?', options: ['Считать, что решения нет', 'Вызвать getModel()', 'Обработать отдельно: залогировать getReasonUnknown(), повторить с упрощением или вернуть «не удалось проверить»', 'Считать, что решение есть'], correct: 2, explain: 'UNKNOWN — третий исход, его нельзя приравнивать ни к SAT, ни к UNSAT.' },
+    { q: 'Зачем закрывать Context?', options: ['Иначе программа не скомпилируется', 'Он держит нативную память Z3, которую GC Java не освобождает вовремя', 'Чтобы сохранить результаты на диск'], correct: 1, explain: 'try (Context ctx = new Context()) { … } — идиоматичный способ.' }
+  ]
+}
+];
+
+// вставка главы: перед финальными уровнями
+var idx = -1;
+for (var i = 0; i < LEVELS.length; i++) if (LEVELS[i].id === 'q-java') idx = i;
+var bossIdx = LEVELS.findIndex(function (l) { return l.id === 'boss-lock'; });
+LEVELS.splice(idx, 1);
+bossIdx = LEVELS.findIndex(function (l) { return l.id === 'boss-lock'; });
+Array.prototype.splice.apply(LEVELS, [bossIdx, 0].concat(J));
+LEVELS.forEach(function (l) { if (l.id === 'boss-lock' || l.id === 'boss-duty') l.ch = 9; });
+CHAPTERS.length = 0;
+[[1, 'Первые шаги'], [2, 'Логика'], [3, 'Целые числа и головоломки'], [4, 'Оптимизация'], [5, 'Битовые векторы и Java'], [6, 'Функции и верификация'], [7, 'SMT-LIB изнутри'], [8, 'Z3 из Java'], [9, 'Финал']].forEach(function (c) { CHAPTERS.push({ n: c[0], title: c[1] }); });
+})();
+
 </script>
 <script>
 /* ===== Интерфейс игры ===== */
@@ -4037,6 +5575,20 @@ function hlPy(src) {
   }
   return out + esc(src.slice(last));
 }
+var JKW = /^(import|public|private|protected|static|final|class|void|int|long|boolean|char|double|new|return|if|else|for|while|do|try|catch|finally|throw|throws|true|false|null|break|continue|var)$/;
+var JZ = /^(Context|Solver|Optimize|Model|Status|IntExpr|BoolExpr|BitVecExpr|ArithExpr|IntSort|BoolSort|BitVecSort|Expr|IntNum|BitVecNum|FuncDecl|Sort|Params|Handle|SATISFIABLE|UNSATISFIABLE|UNKNOWN)$/;
+function hlJava(src) {
+  var re = /(\/\/[^\n]*|\/\*[\s\S]*?\*\/)|("(?:[^"\\\n]|\\.)*"?|'(?:[^'\\\n]|\\.)*'?)|(\b0[xXbB][0-9a-fA-F_]+[lL]?\b|\b\d[\d_]*[lL]?\b)|([A-Za-z_][A-Za-z0-9_]*)/g, out = '', last = 0, m;
+  while ((m = re.exec(src))) {
+    out += esc(src.slice(last, m.index));
+    if (m[1]) out += '<span class="h-c">' + esc(m[1]) + '</span>';
+    else if (m[2]) out += '<span class="h-s">' + esc(m[2]) + '</span>';
+    else if (m[3]) out += '<span class="h-n">' + esc(m[3]) + '</span>';
+    else { var w = m[4]; out += JKW.test(w) ? '<span class="h-k">' + w + '</span>' : JZ.test(w) ? '<span class="h-z">' + w + '</span>' : /^mk[A-Z]/.test(w) ? '<span class="h-o">' + w + '</span>' : esc(w); }
+    last = re.lastIndex;
+  }
+  return out + esc(src.slice(last));
+}
 var SMTCMD = /^(declare-const|declare-fun|define-fun|assert|check-sat|get-model|get-value|push|pop|set-logic|set-option|minimize|maximize|get-objectives|echo|reset|eval|exit|check-sat-assuming|get-assertions)$/;
 function hlSmt(src) {
   var re = /(;[^\n]*)|("(?:[^"]|"")*"?)|(#x[0-9a-fA-F]+|#b[01]+|\b\d+\b)|([()])|([^\s()";]+)/g, out = '', last = 0, m, prevParen = false;
@@ -4068,7 +5620,7 @@ function renderSidebar() {
     var d = lv.filter(function (x) { return progress.done[x.l.id]; }).length;
     h += '<div class="chap"><div class="chap-t"><span><b>' + ch.n + '</b> ' + esc(ch.title) + '</span><span class="chap-c">' + d + '/' + lv.length + '</span></div>';
     lv.forEach(function (x) {
-      var ic = x.l.type === 'quiz' ? '?' : x.l.type === 'smt' ? '()' : (x.l.star ? '★' : '›');
+      var ic = x.l.type === 'quiz' ? '?' : x.l.type === 'smt' ? '()' : x.l.type === 'java' ? 'J' : (x.l.star ? '★' : '›');
       h += '<button class="lv' + (x.i === cur && !sandbox ? ' active' : '') + (progress.done[x.l.id] ? ' done' : '') + '" data-i="' + x.i + '"><span class="lv-n">' + (x.i + 1) + '</span><span class="lv-t">' + esc(x.l.title) + '</span><span class="lv-s">' + (progress.done[x.l.id] ? '✓' : ic) + '</span></button>';
     });
     h += '</div>';
@@ -4093,22 +5645,23 @@ function go(i) {
 /* ---------- уровень ---------- */
 function renderLevel() {
   var lv = LEVELS[cur], ch = chapterOf(lv);
-  var tl = lv.type === 'quiz' ? '<span class="tag t-quiz">теория</span>' : lv.type === 'smt' ? '<span class="tag t-smt">SMT-LIB</span>' : '<span class="tag t-code">практика</span>';
+  var tl = lv.type === 'quiz' ? '<span class="tag t-quiz">теория</span>' : lv.type === 'smt' ? '<span class="tag t-smt">SMT-LIB</span>' : lv.type === 'java' ? '<span class="tag t-java">Java</span>' : '<span class="tag t-code">практика</span>';
   if (lv.star) tl += '<span class="tag t-star">★ сложный</span>';
   var h = '<div class="crumb">Глава ' + ch.n + ' · ' + esc(ch.title) + tl + '</div>' +
     '<h1><span class="num">№' + (cur + 1) + '</span> ' + esc(lv.title) + (progress.done[lv.id] ? ' <span class="okmark">✓</span>' : '') + '</h1>' +
     '<div class="story"><div class="story-l">Заявка в Бюро</div>' + lv.story + '</div>';
   if (lv.theory) h += '<details class="theory"' + (lv.type === 'quiz' || !progress.done[lv.id] ? ' open' : '') + '><summary>Справка</summary><div class="theory-b">' + lv.theory + '</div></details>';
   if (lv.type === 'quiz') h += quizHTML(lv);
-  else h += '<div class="task"><div class="task-l">Задание</div>' + lv.task + '</div>' + editorHTML(lv.type === 'smt' ? 'smt' : 'py', true);
+  else h += '<div class="task"><div class="task-l">Задание</div>' + lv.task + '</div>' + editorHTML(modeOf(lv), true);
   h += '<div id="feedback"></div>';
   h += '<div class="nav"><button class="btn ghost" id="prev"' + (cur === 0 ? ' disabled' : '') + '>← Назад</button><button class="btn ghost" id="next"' + (cur === LEVELS.length - 1 ? ' disabled' : '') + '>Далее →</button></div>';
   $('#content').innerHTML = h;
   $('#prev').onclick = function () { go(cur - 1); };
   $('#next').onclick = function () { go(cur + 1); };
-  if (lv.type === 'quiz') bindQuiz(lv); else bindEditor(lv, lv.type === 'smt' ? 'smt' : 'py');
+  if (lv.type === 'quiz') bindQuiz(lv); else bindEditor(lv, modeOf(lv));
 }
 
+function modeOf(lv) { return lv.type === 'smt' ? 'smt' : lv.type === 'java' ? 'java' : 'py'; }
 /* ---------- викторина ---------- */
 function quizHTML(lv) {
   var h = '<div class="quiz">';
@@ -4152,7 +5705,7 @@ function shake(el) { el.classList.remove('shake'); void el.offsetWidth; el.class
 /* ---------- редактор ---------- */
 function editorHTML(mode, withLevelBtns) {
   return '<div class="ed">' +
-    '<div class="ed-top"><span class="ed-lang">' + (mode === 'smt' ? 'SMT-LIB 2' : 'Python · Z3Py') + '</span><span class="ed-keys">Ctrl+Enter — выполнить · Ctrl+/ — комментарий</span></div>' +
+    '<div class="ed-top"><span class="ed-lang">' + (mode === 'smt' ? 'SMT-LIB 2' : mode === 'java' ? 'Java · com.microsoft.z3' : 'Python · Z3Py') + '</span><span class="ed-keys">Ctrl+Enter — выполнить · Ctrl+/ — комментарий</span></div>' +
     '<div class="ed-area"><pre class="ed-hl" aria-hidden="true"></pre><textarea id="code" spellcheck="false" autocomplete="off" autocapitalize="off"></textarea></div>' +
     '<div class="ed-btns"><button class="btn primary" id="run">▶ Выполнить</button><button class="btn" id="stop" hidden>■ Стоп</button>' +
     (withLevelBtns ? '<button class="btn" id="hint">Подсказка</button><button class="btn" id="sol">Решение</button>' : '') +
@@ -4162,19 +5715,24 @@ function editorHTML(mode, withLevelBtns) {
 }
 function codeKey(lv, mode) { return lv ? lv.id : '__sandbox_' + mode; }
 var SANDBOX_PY = "from z3 import *\n\n# Песочница: пишите что угодно\nx, y = Ints('x y')\ns = Solver()\ns.add(x + y == 10, x > y, y > 0)\nwhile s.check() == sat:\n    m = s.model()\n    print(m)\n    s.add(Or(x != m[x], y != m[y]))\n";
+var SANDBOX_JAVA = 'import com.microsoft.z3.*;\nimport java.util.*;\n\npublic class Main {\n    public static void main(String[] args) {\n        try (Context ctx = new Context()) {\n            IntExpr x = ctx.mkIntConst("x");\n            IntExpr y = ctx.mkIntConst("y");\n            Solver s = ctx.mkSolver();\n            s.add(ctx.mkEq(ctx.mkAdd(x, y), ctx.mkInt(10)));\n            s.add(ctx.mkGt(x, y), ctx.mkGt(y, ctx.mkInt(0)));\n            while (s.check() == Status.SATISFIABLE) {\n                Model m = s.getModel();\n                System.out.println("x = " + m.eval(x, true) + ", y = " + m.eval(y, true));\n                s.add(ctx.mkNot(ctx.mkAnd(ctx.mkEq(x, m.eval(x, true)), ctx.mkEq(y, m.eval(y, true)))));\n            }\n        }\n    }\n}\n';
 var SANDBOX_SMT = "; Песочница SMT-LIB\n(declare-const x Int)\n(declare-const y Int)\n(assert (= (+ x y) 10))\n(assert (> x y))\n(check-sat)\n(get-model)\n";
 function bindEditor(lv, mode) {
   var ta = $('#code'), hl = $('.ed-hl'), key = codeKey(lv, mode);
-  var starter = lv ? lv.starter : (mode === 'smt' ? SANDBOX_SMT : SANDBOX_PY);
+  var starter = lv ? lv.starter : (mode === 'smt' ? SANDBOX_SMT : mode === 'java' ? SANDBOX_JAVA : SANDBOX_PY);
   ta.value = progress.code[key] !== undefined ? progress.code[key] : starter;
-  function paint() { hl.innerHTML = (mode === 'smt' ? hlSmt(ta.value) : hlPy(ta.value)) + '\n'; grow(); }
+  function paint() { hl.innerHTML = (mode === 'smt' ? hlSmt(ta.value) : mode === 'java' ? hlJava(ta.value) : hlPy(ta.value)) + '\n'; grow(); }
   function grow() { ta.style.height = 'auto'; var hgt = Math.max(160, Math.min(560, ta.scrollHeight + 2)); ta.style.height = hgt + 'px'; hl.style.height = hgt + 'px'; }
   function store() { progress.code[key] = ta.value; save(); }
   ta.addEventListener('input', function () { paint(); store(); });
   ta.addEventListener('scroll', function () { hl.scrollTop = ta.scrollTop; hl.scrollLeft = ta.scrollLeft; });
   ta.addEventListener('keydown', function (e) {
     if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); doRun(lv, mode); return; }
-    if ((e.ctrlKey || e.metaKey) && e.key === '/') { e.preventDefault(); toggleComment(ta, mode === 'smt' ? ';' : '#'); paint(); store(); return; }
+    if ((e.ctrlKey || e.metaKey) && e.key === '/') { e.preventDefault(); toggleComment(ta, mode === 'smt' ? ';' : mode === 'java' ? '//' : '#'); paint(); store(); return; }
+    if (mode === 'java' && e.key === '}' && ta.selectionStart === ta.selectionEnd) {
+      var b0 = ta.value.slice(0, ta.selectionStart), ln0 = b0.split('\n').pop();
+      if (/^ {4,}$/.test(ln0)) { e.preventDefault(); ta.setRangeText('}', ta.selectionStart - 4, ta.selectionStart, 'end'); paint(); store(); return; }
+    }
     if (e.key === 'Tab') {
       e.preventDefault();
       var s0 = ta.selectionStart, s1 = ta.selectionEnd, v = ta.value;
@@ -4185,6 +5743,7 @@ function bindEditor(lv, mode) {
     if (e.key === 'Enter' && !e.shiftKey) {
       var before = ta.value.slice(0, ta.selectionStart), line = before.split('\n').pop(), ind = (line.match(/^[ \t]*/) || [''])[0];
       if (mode === 'py' && /:\s*(#.*)?$/.test(line)) ind += '    ';
+      if (mode === 'java' && /[{(]\s*(\/\/.*)?$/.test(line)) ind += '    ';
       if (mode === 'smt') { var bal = 0; for (var i = 0; i < line.length; i++) { if (line[i] === '(') bal++; else if (line[i] === ')') bal--; } if (bal > 0) ind += '  '; }
       e.preventDefault(); insert(ta, '\n' + ind); paint(); store(); return;
     }
@@ -4216,7 +5775,7 @@ function indentLines(ta, dir) {
 function toggleComment(ta, mark) {
   var r = lineRange(ta), seg = ta.value.slice(r[0], r[1]), lines = seg.split('\n');
   var all = lines.every(function (l) { return !l.trim() || l.trim().indexOf(mark) === 0; });
-  var res = lines.map(function (l) { if (!l.trim()) return l; return all ? l.replace(new RegExp('^(\\s*)' + (mark === '#' ? '#' : ';') + ' ?'), '$1') : l.replace(/^(\s*)/, '$1' + mark + ' '); }).join('\n');
+  var res = lines.map(function (l) { if (!l.trim()) return l; return all ? l.replace(new RegExp('^(\\s*)' + (mark === '#' ? '#' : mark === '//' ? '//' : ';') + ' ?'), '$1') : l.replace(/^(\s*)/, '$1' + mark + ' '); }).join('\n');
   ta.setRangeText(res, r[0], r[1], 'select');
 }
 
@@ -4226,14 +5785,15 @@ function doRun(lv, mode) {
   if (running) return;
   var code = $('#code').value;
   runCtx = { lv: lv, mode: mode, t: Date.now() };
-  appendOut('<div class="o-run"><span class="o-pr">' + (mode === 'smt' ? 'z3 -smt2' : 'python') + '</span> запуск…</div>', true);
+  appendOut('<div class="o-run"><span class="o-pr">' + (mode === 'smt' ? 'z3 -smt2' : mode === 'java' ? 'java Main' : 'python') + '</span> запуск…</div>', true);
   exec({ code: code, mode: mode, levelId: lv ? lv.id : null });
 }
 function colorLine(l) {
   var t = esc(l);
-  if (/^(sat|proved)$/.test(l)) return '<span class="o-sat">' + t + '</span>';
-  if (/^(unsat|no solution)$/.test(l)) return '<span class="o-unsat">' + t + '</span>';
-  if (/^(unknown|failed to (solve|prove))$/.test(l)) return '<span class="o-unk">' + t + '</span>';
+  if (/^Exception in thread/.test(l)) return '<span class="o-err">' + t + '</span>';
+  if (/^(sat|proved|SATISFIABLE)$/.test(l)) return '<span class="o-sat">' + t + '</span>';
+  if (/^(unsat|no solution|UNSATISFIABLE)$/.test(l)) return '<span class="o-unsat">' + t + '</span>';
+  if (/^(unknown|failed to (solve|prove)|UNKNOWN)$/.test(l)) return '<span class="o-unk">' + t + '</span>';
   if (/^counterexample$/.test(l)) return '<span class="o-cex">' + t + '</span>';
   if (/^\(error /.test(l)) return '<span class="o-err">' + t + '</span>';
   return t;
@@ -4312,6 +5872,14 @@ o.check(); h.value()</code></pre>
 <h4>Все решения</h4><pre><code>while s.check() == sat:
     m = s.model()
     s.add(Or([v != m[v] for v in vs]))</code></pre>
+<h4>Java API</h4><pre><code>Context ctx = new Context();
+IntExpr x = ctx.mkIntConst("x");
+ctx.mkAdd / mkSub / mkMul / mkEq / mkLt
+ctx.mkAnd / mkOr / mkNot / mkImplies / mkITE
+Solver s = ctx.mkSolver(); s.add(...);
+s.check() == Status.SATISFIABLE
+((IntNum) s.getModel().eval(x, true)).getInt()
+Optimize o = ctx.mkOptimize(); o.MkMinimize(e)</code></pre>
 <h4>SMT-LIB</h4><pre><code>(declare-const x Int)  (assert (&gt; x 0))
 (check-sat) (get-model) (get-value (x))
 (push) (pop) (minimize x) (get-objectives)</code></pre></div></div>`;
@@ -4319,7 +5887,7 @@ function openSandbox(mode) {
   if (running) stop();
   sandbox = mode || 'py'; renderSidebar(); closeNav();
   var h = '<div class="crumb">Свободный режим</div><h1>Песочница</h1>' +
-    '<div class="tabs"><button class="tab' + (sandbox === 'py' ? ' on' : '') + '" data-m="py">Python · Z3Py</button><button class="tab' + (sandbox === 'smt' ? ' on' : '') + '" data-m="smt">SMT-LIB</button></div>' +
+    '<div class="tabs"><button class="tab' + (sandbox === 'py' ? ' on' : '') + '" data-m="py">Python · Z3Py</button><button class="tab' + (sandbox === 'java' ? ' on' : '') + '" data-m="java">Java</button><button class="tab' + (sandbox === 'smt' ? ' on' : '') + '" data-m="smt">SMT-LIB</button></div>' +
     '<details class="theory"><summary>Шпаргалка</summary><div class="theory-b">' + CHEAT + '</div></details>' + editorHTML(sandbox, false);
   $('#content').innerHTML = h;
   $$('.tab').forEach(function (t) { t.onclick = function () { openSandbox(t.dataset.m); }; });
